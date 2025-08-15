@@ -39,6 +39,7 @@ import { NdjsonClient } from "cyrus-ndjson-client";
 import { fileTypeFromBuffer } from "file-type";
 import { AgentSessionManager } from "./AgentSessionManager.js";
 import { SharedApplicationServer } from "./SharedApplicationServer.js";
+import { LinearClientWrapper } from "./LinearClientWrapper.js";
 import type {
 	EdgeWorkerConfig,
 	EdgeWorkerEvents,
@@ -98,8 +99,8 @@ export class EdgeWorker extends EventEmitter {
 			if (repo.isActive !== false) {
 				this.repositories.set(repo.id, repo);
 
-				// Create Linear client for this repository's workspace
-				const linearClient = new LinearClient({
+				// Create Linear client wrapper with rate limiting for this repository's workspace
+				const linearClient = new LinearClientWrapper({
 					accessToken: repo.linearToken,
 				});
 				this.linearClients.set(repo.id, linearClient);
