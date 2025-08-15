@@ -1,4 +1,5 @@
 import type { Issue as LinearIssue } from "@linear/sdk";
+import { LRUCache } from "lru-cache";
 
 export interface CachedIssue {
 	issue: LinearIssue;
@@ -10,13 +11,30 @@ export interface CachedIssue {
 
 /**
  * Smart cache for Linear issues with TTL and fallback support
+ * Uses lru-cache for efficient memory management and automatic eviction
  */
 export class IssueCache {
-	private cache: Map<string, CachedIssue> = new Map();
+	private cache: LRUCache<string, CachedIssue>;
 	private readonly DEFAULT_TTL = 600000; // 10 minutes default TTL
 	private readonly EXTENDED_TTL = 1800000; // 30 minutes for frequently accessed issues
 	private readonly STALE_TTL = 3600000; // 1 hour - maximum time to keep stale data
 	private readonly MAX_CACHE_SIZE = 100; // Maximum number of issues to cache
+	
+	constructor() {
+		this.cache = new LRUCache<string, CachedIssue>({
+			max: this.MAX_CACHE_SIZE,
+			// Don't use built-in TTL since we need custom stale data handling
+			ttl: 0,
+			// Update access time on get
+			updateAgeOnGet: false,
+			// Allow stale data to be returned while revalidating
+			allowStale: true,
+			// Dispose callback for logging
+			dispose: (_value, key) => {
+				console.log(`[IssueCache] Evicted issue ${key} from cache`);
+			}
+		});
+	}
 	
 	/**
 	 * Get an issue from cache
@@ -35,6 +53,8 @@ export class IssueCache {
 		// Update access tracking
 		cached.accessCount++;
 		cached.lastAccessed = now;
+		// Update the cache entry with new access info
+		this.cache.set(issueId, cached);
 		
 		// Check if data is fresh
 		if (age <= cached.ttl) {
@@ -49,7 +69,14 @@ export class IssueCache {
 		}
 		
 		// Data is too old
-		console.log(`[IssueCache] Cache miss for issue ${issueId} (expired)`);
+		if (age > this.STALE_TTL) {
+			// Only delete if it's beyond stale TTL
+			this.cache.delete(issueId);
+			console.log(`[IssueCache] Cache miss for issue ${issueId} (expired beyond stale TTL)`);
+		} else {
+			// Data is stale but not requested with allowStale
+			console.log(`[IssueCache] Cache miss for issue ${issueId} (expired)`);
+		}
 		return null;
 	}
 	
@@ -77,9 +104,6 @@ export class IssueCache {
 		});
 		
 		console.log(`[IssueCache] Cached issue ${issueId} with TTL ${ttl}ms`);
-		
-		// Enforce cache size limit
-		this.evictIfNeeded();
 	}
 	
 	/**
@@ -131,6 +155,7 @@ export class IssueCache {
 		let totalAccessCount = 0;
 		let mostAccessed: { issueId: string; count: number } | null = null;
 		
+		// Iterate through cache entries
 		for (const [issueId, cached] of this.cache.entries()) {
 			const age = now - cached.timestamp;
 			if (age <= cached.ttl) {
@@ -153,32 +178,6 @@ export class IssueCache {
 			totalAccessCount,
 			mostAccessed
 		};
-	}
-	
-	/**
-	 * Evict least recently used items if cache is too large
-	 */
-	private evictIfNeeded(): void {
-		if (this.cache.size <= this.MAX_CACHE_SIZE) {
-			return;
-		}
-		
-		// Sort by last accessed time
-		const entries = Array.from(this.cache.entries())
-			.sort((a, b) => a[1].lastAccessed - b[1].lastAccessed);
-		
-		// Remove oldest entries
-		const toRemove = this.cache.size - this.MAX_CACHE_SIZE + 10; // Remove 10 extra to avoid frequent eviction
-		let removed = 0;
-		for (let i = 0; i < toRemove && i < entries.length; i++) {
-			const entry = entries[i];
-			if (entry) {
-				this.cache.delete(entry[0]);
-				removed++;
-			}
-		}
-		
-		console.log(`[IssueCache] Evicted ${removed} least recently used items`);
 	}
 	
 	/**
@@ -206,6 +205,8 @@ export class IssueCache {
 		// Extend TTL for frequently accessed issues
 		if (cached.accessCount > 10) {
 			cached.ttl = this.EXTENDED_TTL;
+			// Update the cache entry with new TTL
+			this.cache.set(issueId, cached);
 			console.log(`[IssueCache] Extended TTL for frequently accessed issue ${issueId}`);
 		}
 	}
