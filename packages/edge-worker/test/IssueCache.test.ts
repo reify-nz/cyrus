@@ -4,7 +4,6 @@ import type { Issue as LinearIssue } from "@linear/sdk";
 
 describe("IssueCache", () => {
 	let cache: IssueCache;
-	const originalDateNow = Date.now;
 
 	const mockIssue = (id: string, title: string = "Test Issue"): LinearIssue => ({
 		id,
@@ -15,12 +14,13 @@ describe("IssueCache", () => {
 	} as LinearIssue);
 
 	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date(1000000));
 		cache = new IssueCache();
-		vi.spyOn(Date, "now").mockReturnValue(1000000);
 	});
 
 	afterEach(() => {
-		Date.now = originalDateNow;
+		vi.useRealTimers();
 		vi.restoreAllMocks();
 	});
 
@@ -44,7 +44,7 @@ describe("IssueCache", () => {
 			cache.set("123", issue);
 			
 			// Move time forward beyond default TTL (10 minutes)
-			vi.mocked(Date.now).mockReturnValue(1000000 + 11 * 60 * 1000);
+			vi.setSystemTime(new Date(1000000 + 11 * 60 * 1000));
 			
 			const retrieved = cache.get("123");
 			expect(retrieved).toBeNull();
@@ -57,7 +57,7 @@ describe("IssueCache", () => {
 			cache.set("123", issue);
 			
 			// Move time forward but within default TTL
-			vi.mocked(Date.now).mockReturnValue(1000000 + 5 * 60 * 1000);
+			vi.setSystemTime(new Date(1000000 + 5 * 60 * 1000));
 			
 			const retrieved = cache.get("123");
 			expect(retrieved).toEqual(issue);
@@ -76,7 +76,7 @@ describe("IssueCache", () => {
 			cache.set("123", issue);
 			
 			// Move time forward beyond default TTL but within extended TTL
-			vi.mocked(Date.now).mockReturnValue(1000000 + 20 * 60 * 1000); // 20 minutes
+			vi.setSystemTime(new Date(1000000 + 20 * 60 * 1000)); // 20 minutes
 			
 			const retrieved = cache.get("123");
 			expect(retrieved).toEqual(issue);
@@ -94,7 +94,7 @@ describe("IssueCache", () => {
 			cache.updateTTL("123");
 			
 			// Move time forward beyond default TTL
-			vi.mocked(Date.now).mockReturnValue(1000000 + 15 * 60 * 1000);
+			vi.setSystemTime(new Date(1000000 + 15 * 60 * 1000));
 			
 			const retrieved = cache.get("123");
 			expect(retrieved).toEqual(issue);
@@ -107,7 +107,7 @@ describe("IssueCache", () => {
 			cache.set("123", issue);
 			
 			// Move time forward beyond TTL but within stale TTL
-			vi.mocked(Date.now).mockReturnValue(1000000 + 20 * 60 * 1000); // 20 minutes
+			vi.setSystemTime(new Date(1000000 + 20 * 60 * 1000)); // 20 minutes
 			
 			const fresh = cache.get("123", false);
 			expect(fresh).toBeNull();
@@ -121,7 +121,7 @@ describe("IssueCache", () => {
 			cache.set("123", issue);
 			
 			// Move time forward beyond stale TTL (1 hour)
-			vi.mocked(Date.now).mockReturnValue(1000000 + 70 * 60 * 1000);
+			vi.setSystemTime(new Date(1000000 + 70 * 60 * 1000));
 			
 			const stale = cache.get("123", true);
 			expect(stale).toBeNull();
@@ -246,7 +246,7 @@ describe("IssueCache", () => {
 			}
 			
 			// Move time forward slightly and access some old items to make them recently used
-			vi.mocked(Date.now).mockReturnValue(1000000 + 1000);
+			vi.setSystemTime(new Date(1000000 + 1000));
 			cache.get("0");
 			cache.get("1");
 			
@@ -274,7 +274,7 @@ describe("IssueCache", () => {
 			expect(cache.needsRefresh("123")).toBe(false);
 			
 			// Move time forward beyond TTL
-			vi.mocked(Date.now).mockReturnValue(1000000 + 11 * 60 * 1000);
+			vi.setSystemTime(new Date(1000000 + 11 * 60 * 1000));
 			
 			expect(cache.needsRefresh("123")).toBe(true);
 		});
@@ -295,9 +295,9 @@ describe("IssueCache", () => {
 			cache.set("456", issue2);
 			
 			// Add stale issue
-			vi.mocked(Date.now).mockReturnValue(1000000 + 15 * 60 * 1000);
+			vi.setSystemTime(new Date(1000000 + 15 * 60 * 1000));
 			cache.set("789", issue3);
-			vi.mocked(Date.now).mockReturnValue(1000000 + 25 * 60 * 1000);
+			vi.setSystemTime(new Date(1000000 + 25 * 60 * 1000));
 			
 			// Access issues
 			cache.get("123");

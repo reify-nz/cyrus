@@ -3,19 +3,17 @@ import { RateLimitTracker } from "../src/RateLimitTracker.js";
 
 describe("RateLimitTracker", () => {
 	let tracker: RateLimitTracker;
-	let nowSpy: ReturnType<typeof vi.spyOn>;
-	const originalDateNow = Date.now;
 
 	beforeEach(() => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date(1000000));
 		// Restore all mocks before creating new tracker
 		vi.restoreAllMocks();
 		tracker = new RateLimitTracker();
-		// Mock Date.now to have predictable timing
-		nowSpy = vi.spyOn(Date, "now").mockReturnValue(1000000);
 	});
 
 	afterEach(() => {
-		Date.now = originalDateNow;
+		vi.useRealTimers();
 		vi.restoreAllMocks();
 	});
 
@@ -68,14 +66,14 @@ describe("RateLimitTracker", () => {
 	describe("Request Rate Tracking", () => {
 		it("should track request timestamps", () => {
 			// Simulate multiple requests within the history window
-			nowSpy.mockReturnValueOnce(1000);
+			vi.setSystemTime(new Date(1000));
 			tracker.consumeRequest();
 
-			nowSpy.mockReturnValueOnce(2000);
+			vi.setSystemTime(new Date(2000));
 			tracker.consumeRequest();
 
 			// Set current time for rate calculation
-			nowSpy.mockReturnValue(3000);
+			vi.setSystemTime(new Date(3000));
 			tracker.consumeRequest();
 
 			const rate = tracker.getCurrentRequestRate();
@@ -91,11 +89,11 @@ describe("RateLimitTracker", () => {
 
 		it("should clean old request history", () => {
 			// Add requests beyond the window
-			nowSpy.mockReturnValueOnce(1000);
+			vi.setSystemTime(new Date(1000));
 			tracker.consumeRequest();
 
 			// Move forward beyond the 60-second window
-			nowSpy.mockReturnValueOnce(70000);
+			vi.setSystemTime(new Date(70000));
 			tracker.consumeRequest();
 
 			const rate = tracker.getCurrentRequestRate();
@@ -113,7 +111,7 @@ describe("RateLimitTracker", () => {
 
 			// Simulate high request rate (10 req/sec)
 			for (let i = 0; i < 10; i++) {
-				nowSpy.mockReturnValueOnce(1000 + i * 100);
+				vi.setSystemTime(new Date(1000 + i * 100));
 				tracker.consumeRequest();
 			}
 

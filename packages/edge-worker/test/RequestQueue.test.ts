@@ -5,18 +5,14 @@ import { RateLimitTracker } from "../src/RateLimitTracker.js";
 describe("RequestQueue", () => {
 	let requestQueue: RequestQueue;
 	let rateLimitTracker: RateLimitTracker;
-	let nowSpy: ReturnType<typeof vi.spyOn>;
-	const originalDateNow = Date.now;
 
 	beforeEach(() => {
 		vi.restoreAllMocks();
 		rateLimitTracker = new RateLimitTracker();
 		requestQueue = new RequestQueue(rateLimitTracker);
-		nowSpy = vi.spyOn(Date, "now").mockReturnValue(1000000);
 	});
 
 	afterEach(() => {
-		Date.now = originalDateNow;
 		vi.restoreAllMocks();
 	});
 
