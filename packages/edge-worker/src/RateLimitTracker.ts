@@ -1,4 +1,14 @@
 /**
+ * Configuration options for RateLimitTracker
+ */
+export interface RateLimitTrackerOptions {
+	emergencyThreshold?: number;
+	conservativeThreshold?: number;
+	criticalOperationReserve?: number;
+	historyWindowMs?: number;
+}
+
+/**
  * Rate Limit Tracker for Linear API
  * Tracks rate limit headers and provides intelligent request management
  */
@@ -11,12 +21,19 @@ export class RateLimitTracker {
 	
 	// Track request patterns for predictive limiting
 	private requestHistory: number[] = []; // Timestamps of recent requests
-	private readonly HISTORY_WINDOW_MS = 60000; // Track last minute of requests
+	private readonly HISTORY_WINDOW_MS: number;
 	
 	// Thresholds for different operation modes
-	private readonly EMERGENCY_THRESHOLD = 100;
-	private readonly CONSERVATIVE_THRESHOLD = 300;
-	private readonly CRITICAL_OPERATION_RESERVE = 50; // Reserve for critical operations
+	private readonly EMERGENCY_THRESHOLD: number;
+	private readonly CONSERVATIVE_THRESHOLD: number;
+	private readonly CRITICAL_OPERATION_RESERVE: number;
+
+	constructor(options: RateLimitTrackerOptions = {}) {
+		this.EMERGENCY_THRESHOLD = options.emergencyThreshold ?? 100;
+		this.CONSERVATIVE_THRESHOLD = options.conservativeThreshold ?? 300;
+		this.CRITICAL_OPERATION_RESERVE = options.criticalOperationReserve ?? 50;
+		this.HISTORY_WINDOW_MS = options.historyWindowMs ?? 60000;
+	}
 	
 	/**
 	 * Update rate limit info from Linear response headers
@@ -61,7 +78,7 @@ export class RateLimitTracker {
 		this.trackRequest();
 		
 		// Log current state
-		console.log(`[RateLimitTracker] Updated limits - Requests: ${this.requestsRemaining}/${this.requestsLimit}, Reset in: ${this.getTimeUntilReset()}ms`);
+		console.debug(`[RateLimitTracker] Updated limits - Requests: ${this.requestsRemaining}/${this.requestsLimit}, Reset in: ${this.getTimeUntilReset()}ms`);
 	}
 	
 	/**

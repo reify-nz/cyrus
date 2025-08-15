@@ -198,9 +198,12 @@ export class RequestQueue {
 		lowCount: number;
 		processing: boolean;
 	} {
-		const criticalCount = this.queue.filter(r => r.priority === 'critical').length;
-		const normalCount = this.queue.filter(r => r.priority === 'normal').length;
-		const lowCount = this.queue.filter(r => r.priority === 'low').length;
+		let criticalCount = 0, normalCount = 0, lowCount = 0;
+		for (const r of this.queue) {
+			if (r.priority === 'critical') criticalCount++;
+			else if (r.priority === 'normal') normalCount++;
+			else lowCount++;
+		}
 		
 		return {
 			queueLength: this.queue.length,

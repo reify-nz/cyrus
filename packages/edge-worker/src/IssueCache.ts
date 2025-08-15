@@ -105,12 +105,14 @@ export class IssueCache {
 	 * @param issues Array of issues to pre-cache
 	 */
 	warm(issues: LinearIssue[]): void {
+		let added = 0;
 		for (const issue of issues) {
 			if (issue.id) {
 				this.set(issue.id, issue);
+				added++;
 			}
 		}
-		console.log(`[IssueCache] Warmed cache with ${issues.length} issues`);
+		console.log(`[IssueCache] Warmed cache with ${added}/${issues.length} issues`);
 	}
 	
 	/**
@@ -167,14 +169,16 @@ export class IssueCache {
 		
 		// Remove oldest entries
 		const toRemove = this.cache.size - this.MAX_CACHE_SIZE + 10; // Remove 10 extra to avoid frequent eviction
+		let removed = 0;
 		for (let i = 0; i < toRemove && i < entries.length; i++) {
 			const entry = entries[i];
 			if (entry) {
 				this.cache.delete(entry[0]);
+				removed++;
 			}
 		}
 		
-		console.log(`[IssueCache] Evicted ${toRemove} least recently used items`);
+		console.log(`[IssueCache] Evicted ${removed} least recently used items`);
 	}
 	
 	/**

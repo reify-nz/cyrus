@@ -30,10 +30,9 @@ function getSharedInstances() {
 
 /**
  * Decorator/Wrapper for Linear SDK client with automatic rate limiting, caching, and request prioritization
- * Implements the same interface as LinearClient for drop-in compatibility
+ * Extends LinearClient for compatibility but uses the same instance to avoid duplication
  */
 export class LinearClientWrapper extends LinearClient {
-	private wrappedClient: LinearClient;
 	private rateLimitTracker: RateLimitTracker;
 	private requestQueue: RequestQueue;
 	private issueCache: IssueCache;
@@ -43,11 +42,8 @@ export class LinearClientWrapper extends LinearClient {
 	private batchTimers: Map<string, NodeJS.Timeout> = new Map();
 	
 	constructor(config: { accessToken: string }) {
-		// Call parent constructor
+		// Call parent constructor - this creates the single client instance
 		super(config);
-		
-		// Keep reference to the actual client
-		this.wrappedClient = new LinearClient(config);
 		
 		// Use shared instances for rate limiting and caching
 		const shared = getSharedInstances();
@@ -115,10 +111,16 @@ export class LinearClientWrapper extends LinearClient {
 				if (error.message?.includes('rate limit') || error.message?.includes('429') || error.status === 429) {
 					console.error(`[LinearClientWrapper] Rate limit exceeded`);
 					
-					// Update tracker to emergency mode
+					// Update tracker to emergency mode using available headers
+					const resetHeader =
+						(error as any)?.response?.headers?.get?.('x-ratelimit-requests-reset')
+						?? (error as any)?.headers?.['x-ratelimit-requests-reset'];
+					const resetSeconds = resetHeader
+						? String(resetHeader)
+						: String(Math.floor((Date.now() + 3600000) / 1000));
 					this.rateLimitTracker.updateFromHeaders({
 						'x-ratelimit-requests-remaining': '0',
-						'x-ratelimit-requests-reset': String(Math.floor((Date.now() + 3600000) / 1000))
+						'x-ratelimit-requests-reset': resetSeconds
 					});
 				}
 				throw error;
@@ -151,7 +153,7 @@ export class LinearClientWrapper extends LinearClient {
 		// Fetch from API
 		try {
 			const issue = await this.executeWithTracking(
-				() => this.wrappedClient.issue(issueId),
+				() => super.issue(issueId),
 				'issue',
 				[issueId]
 			);
@@ -181,7 +183,7 @@ export class LinearClientWrapper extends LinearClient {
 		this.issueCache.invalidate(issueId);
 		
 		return this.executeWithTracking(
-			() => this.wrappedClient.updateIssue(issueId, input),
+			() => super.updateIssue(issueId, input),
 			'updateIssue',
 			[issueId, input]
 		);
@@ -192,7 +194,7 @@ export class LinearClientWrapper extends LinearClient {
 	 */
 	async createComment(input: any): Promise<any> {
 		return this.executeWithTracking(
-			() => this.wrappedClient.createComment(input),
+			() => super.createComment(input),
 			'createComment',
 			[input]
 		);
@@ -215,7 +217,7 @@ export class LinearClientWrapper extends LinearClient {
 		
 		// Send immediately for important activities
 		return this.executeWithTracking(
-			() => this.wrappedClient.createAgentActivity(input),
+			() => super.createAgentActivity(input),
 			'createAgentActivity',
 			[input]
 		);
@@ -224,7 +226,7 @@ export class LinearClientWrapper extends LinearClient {
 	/**
 	 * Determine if an activity should be batched
 	 */
-	private shouldBatchActivity(input: any, operationMode: string): boolean {
+	private shouldBatchActivity(input: any, operationMode: ReturnType<RateLimitTracker['getOperationMode']>): boolean {
 		// Always batch in emergency mode
 		if (operationMode === 'emergency') {
 			return true;
@@ -315,7 +317,7 @@ export class LinearClientWrapper extends LinearClient {
 					: thoughts.map((t, i) => `${i + 1}. ${t}`).join('\n');
 				
 				const result = await this.executeWithTracking(
-					() => this.wrappedClient.createAgentActivity({
+					() => super.createAgentActivity({
 						agentSessionId: sessionId,
 						content: {
 							type: 'thought',
@@ -333,7 +335,7 @@ export class LinearClientWrapper extends LinearClient {
 			// Send other activities individually
 			for (let i = 0; i < otherActivities.length; i++) {
 				const result = await this.executeWithTracking(
-					() => this.wrappedClient.createAgentActivity(otherActivities[i]),
+					() => super.createAgentActivity(otherActivities[i]),
 					'createAgentActivity',
 					[otherActivities[i]]
 				);
@@ -354,7 +356,7 @@ export class LinearClientWrapper extends LinearClient {
 	 */
 	async comments(variables?: any): Promise<any> {
 		return this.executeWithTracking(
-			() => this.wrappedClient.comments(variables),
+			() => super.comments(variables),
 			'comments',
 			[variables]
 		);
@@ -362,7 +364,7 @@ export class LinearClientWrapper extends LinearClient {
 	
 	async workflowStates(variables?: any): Promise<any> {
 		return this.executeWithTracking(
-			() => this.wrappedClient.workflowStates(variables),
+			() => super.workflowStates(variables),
 			'workflowStates',
 			[variables]
 		);
@@ -370,7 +372,7 @@ export class LinearClientWrapper extends LinearClient {
 	
 	async comment(variables: any): Promise<any> {
 		return this.executeWithTracking(
-			() => this.wrappedClient.comment(variables),
+			() => super.comment(variables),
 			'comment',
 			[variables]
 		);
