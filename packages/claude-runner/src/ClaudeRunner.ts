@@ -227,8 +227,11 @@ export class ClaudeRunner extends EventEmitter {
 		// Create abort controller for this session
 		this.abortController = new AbortController();
 
-		// Reset messages array
-		this.messages = [];
+        // Reset messages array
+        this.messages = [];
+
+        // If a retry is needed due to usage limits, we'll store the promise here
+        let retryPromise: Promise<ClaudeSessionInfo> | null = null;
 
 		try {
 			// Determine prompt mode and setup
@@ -406,26 +409,66 @@ export class ClaudeRunner extends EventEmitter {
 				this.sessionInfo.isRunning = false;
 			}
 
-			if (error instanceof AbortError) {
-				console.log("[ClaudeRunner] Session was aborted");
-			} else if (
-				error instanceof Error &&
-				error.message.includes("Claude Code process exited with code 143")
-			) {
-				// Exit code 143 is SIGTERM (128 + 15), which indicates graceful termination
-				// This is expected when the session is stopped during unassignment
-				console.log(
-					"[ClaudeRunner] Session was terminated gracefully (SIGTERM)",
-				);
-			} else {
-				this.emit(
-					"error",
-					error instanceof Error ? error : new Error(String(error)),
-				);
-			}
-		} finally {
-			// Clean up
-			this.abortController = null;
+                if (error instanceof AbortError) {
+                                console.log("[ClaudeRunner] Session was aborted");
+                        } else if (
+                                error instanceof Error &&
+                                error.message.includes("Claude Code process exited with code 143")
+                        ) {
+                                // Exit code 143 is SIGTERM (128 + 15), which indicates graceful termination
+                                // This is expected when the session is stopped during unassignment
+                                console.log(
+                                        "[ClaudeRunner] Session was terminated gracefully (SIGTERM)",
+                                );
+                        } else if (
+                                error instanceof Error &&
+                                /usage limit reached/i.test(error.message)
+                        ) {
+                                const timeMatch = error.message.match(
+                                        /reset at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i,
+                                );
+                                if (timeMatch) {
+                                        let hour = parseInt(timeMatch[1], 10);
+                                        const minute = timeMatch[2] ? parseInt(timeMatch[2], 10) : 0;
+                                        const meridiem = timeMatch[3].toLowerCase();
+                                        if (meridiem === "pm" && hour < 12) hour += 12;
+                                        if (meridiem === "am" && hour === 12) hour = 0;
+                                        const now = new Date();
+                                        const target = new Date(now);
+                                        target.setHours(hour, minute, 0, 0);
+                                        if (target <= now) {
+                                                target.setDate(target.getDate() + 1);
+                                        }
+                                        target.setMinutes(target.getMinutes() + 1); // wait an extra minute
+                                        const waitMs = target.getTime() - now.getTime();
+                                        console.log(
+                                                `[ClaudeRunner] Usage limit reached. Waiting until ${target.toLocaleString()} before retrying`,
+                                        );
+                                        retryPromise = new Promise<ClaudeSessionInfo>((resolve) =>
+                                                setTimeout(resolve, waitMs),
+                                        ).then(() =>
+                                                this.startWithPrompt(
+                                                        stringPrompt ?? null,
+                                                        streamingInitialPrompt,
+                                                ),
+                                        );
+                                } else {
+                                        this.emit(
+                                                "error",
+                                                error instanceof Error
+                                                        ? error
+                                                        : new Error(String(error)),
+                                        );
+                                }
+                        } else {
+                                this.emit(
+                                        "error",
+                                        error instanceof Error ? error : new Error(String(error)),
+                                );
+                        }
+                } finally {
+                        // Clean up
+                        this.abortController = null;
 
 			// Complete and clean up streaming prompt if it exists
 			if (this.streamingPrompt) {
@@ -444,8 +487,11 @@ export class ClaudeRunner extends EventEmitter {
 			}
 		}
 
-		return this.sessionInfo;
-	}
+                if (retryPromise) {
+                        return retryPromise;
+                }
+                return this.sessionInfo;
+        }
 
 	/**
 	 * Update prompt versions (can be called after constructor)

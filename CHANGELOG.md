@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- Automatically pauses and resumes Claude sessions when hitting usage limits, waiting until the reset time plus one minute before retrying (cyrus-claude-runner)
+
 ## [0.1.42] - 2025-08-15
 
 ### Changed

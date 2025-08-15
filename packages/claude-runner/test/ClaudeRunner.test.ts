@@ -414,8 +414,8 @@ describe("ClaudeRunner", () => {
 		});
 	});
 
-	describe("Error Handling", () => {
-		it("should emit error event on query failure", async () => {
+        describe("Error Handling", () => {
+                it("should emit error event on query failure", async () => {
 			const errorHandler = vi.fn();
 			runner.on("error", errorHandler);
 
@@ -447,9 +447,9 @@ describe("ClaudeRunner", () => {
 			expect(runner.isRunning()).toBe(false);
 		});
 
-		it("should handle SIGTERM (exit code 143) gracefully", async () => {
-			const errorHandler = vi.fn();
-			runner.on("error", errorHandler);
+                it("should handle SIGTERM (exit code 143) gracefully", async () => {
+                        const errorHandler = vi.fn();
+                        runner.on("error", errorHandler);
 
 			// biome-ignore lint/correctness/useYield: This is just mocked for testing
 			mockQuery.mockImplementation(async function* () {
@@ -458,10 +458,43 @@ describe("ClaudeRunner", () => {
 
 			await runner.start("test");
 
-			expect(errorHandler).not.toHaveBeenCalled();
-			expect(runner.isRunning()).toBe(false);
-		});
-	});
+                        expect(errorHandler).not.toHaveBeenCalled();
+                        expect(runner.isRunning()).toBe(false);
+                });
+
+                it("should pause and resume after usage limit error", async () => {
+                        vi.useFakeTimers();
+                        vi.setSystemTime(new Date("2024-01-01T20:00:00"));
+
+                        const usageError = new Error(
+                                "Claude usage limit reached. Your limit will reset at 8:30pm (Pacific/Auckland).",
+                        );
+
+                        mockQuery
+                                .mockImplementationOnce(async function* () {
+                                        throw usageError;
+                                })
+                                .mockImplementationOnce(async function* () {
+                                        yield {
+                                                type: "assistant",
+                                                message: { content: [] },
+                                                parent_tool_use_id: null,
+                                                session_id: "test-session",
+                                        } as any;
+                                });
+
+                        const startPromise = runner.start("test");
+
+                        // Advance timers to pass wait time (30 min + 1 min)
+                        await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
+
+                        const sessionInfo = await startPromise;
+
+                        expect(mockQuery).toHaveBeenCalledTimes(2);
+                        expect(sessionInfo.sessionId).toBe("test-session");
+                        vi.useRealTimers();
+                });
+        });
 
 	describe("Session Info", () => {
 		it("should return null session info when not running", () => {
