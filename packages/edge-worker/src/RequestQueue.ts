@@ -134,7 +134,8 @@ export class RequestQueue {
 						if (removedRequest) {
 							this.queue.push(removedRequest); // Add to end
 						}
-						continue;
+						// Break to avoid infinite loop when queue contains only low-priority items
+						break;
 					}
 					
 					// For higher priority, wait for rate limit reset
