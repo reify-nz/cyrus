@@ -102,15 +102,16 @@ describe("RequestQueue", () => {
 			const lowPromise = requestQueue.enqueue(lowExecute, "low");
 			const criticalPromise = requestQueue.enqueue(criticalExecute, "critical");
 
-			// Advance timers to trigger processing
-			vi.runAllTimers();
+			// Run a single batch window to process the critical task
+			await vi.advanceTimersByTimeAsync(rateLimitTracker.getRecommendedBatchWindow());
 
 			// Critical should execute quickly
 			await criticalPromise;
 			expect(criticalExecuted).toBe(true);
 
-			// Low priority will be deferred but should eventually execute
-			// (we don't need to wait for it to prevent test timeouts)
+			// Low will be deferred; clear to avoid dangling timers/promises
+			requestQueue.clear();
+			await expect(lowPromise).rejects.toThrow("Queue cleared");
 		});
 	});
 
