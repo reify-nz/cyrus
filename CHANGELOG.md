@@ -6,6 +6,10 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - Automatically pauses and resumes Claude sessions when hitting usage limits, waiting until the reset time plus one minute before retrying (cyrus-claude-runner)
+### Fixed
+- Fixed git worktree creation failures for sub-issues when parent branch doesn't exist remotely
+  - Added proper remote branch existence checking before attempting worktree creation
+  - Gracefully falls back to local parent branch or default base branch when remote parent branch is unavailable
 
 ## [0.1.42] - 2025-08-15
 

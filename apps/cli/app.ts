@@ -1067,11 +1067,15 @@ class EdgeApp {
 		} catch {
 			// Branch doesn't exist locally, check remote
 			try {
-				execSync(`git ls-remote --heads origin "${branchName}"`, {
-					cwd: repoPath,
-					stdio: "pipe",
-				});
-				return true;
+				const remoteOutput = execSync(
+					`git ls-remote --heads origin "${branchName}"`,
+					{
+						cwd: repoPath,
+						stdio: "pipe",
+					},
+				);
+				// Check if output is non-empty (branch actually exists on remote)
+				return remoteOutput && remoteOutput.toString().trim().length > 0;
 			} catch {
 				return false;
 			}
@@ -1260,12 +1264,59 @@ class EdgeApp {
 			let worktreeCmd: string;
 			if (createBranch) {
 				if (hasRemote) {
-					// Always prefer remote version if available
-					const remoteBranch = `origin/${baseBranch}`;
-					console.log(
-						`Creating git worktree at ${workspacePath} from ${remoteBranch}`,
-					);
-					worktreeCmd = `git worktree add "${workspacePath}" -b "${branchName}" "${remoteBranch}"`;
+					// Check if the base branch exists remotely
+					let useRemoteBranch = false;
+					try {
+						const remoteOutput = execSync(
+							`git ls-remote --heads origin "${baseBranch}"`,
+							{
+								cwd: repository.repositoryPath,
+								stdio: "pipe",
+							},
+						);
+						// Check if output is non-empty (branch actually exists on remote)
+						useRemoteBranch =
+							remoteOutput && remoteOutput.toString().trim().length > 0;
+						if (!useRemoteBranch) {
+							console.log(
+								`Base branch '${baseBranch}' not found on remote, checking locally...`,
+							);
+						}
+					} catch {
+						// Base branch doesn't exist remotely, use local or fall back to default
+						console.log(
+							`Base branch '${baseBranch}' not found on remote, checking locally...`,
+						);
+					}
+
+					if (useRemoteBranch) {
+						// Use remote version of base branch
+						const remoteBranch = `origin/${baseBranch}`;
+						console.log(
+							`Creating git worktree at ${workspacePath} from ${remoteBranch}`,
+						);
+						worktreeCmd = `git worktree add "${workspacePath}" -b "${branchName}" "${remoteBranch}"`;
+					} else {
+						// Check if base branch exists locally
+						try {
+							execSync(`git rev-parse --verify "${baseBranch}"`, {
+								cwd: repository.repositoryPath,
+								stdio: "pipe",
+							});
+							// Use local base branch
+							console.log(
+								`Creating git worktree at ${workspacePath} from local ${baseBranch}`,
+							);
+							worktreeCmd = `git worktree add "${workspacePath}" -b "${branchName}" "${baseBranch}"`;
+						} catch {
+							// Base branch doesn't exist locally either, fall back to remote default
+							console.log(
+								`Base branch '${baseBranch}' not found locally, falling back to remote ${repository.baseBranch}`,
+							);
+							const defaultRemoteBranch = `origin/${repository.baseBranch}`;
+							worktreeCmd = `git worktree add "${workspacePath}" -b "${branchName}" "${defaultRemoteBranch}"`;
+						}
+					}
 				} else {
 					// No remote, use local branch
 					console.log(
