@@ -75,7 +75,10 @@ export class RequestQueue {
 		
 		this.queue.splice(insertIndex, 0, request);
 		
-		console.log(`[RequestQueue] Queued ${request.priority} priority request. Queue size: ${this.queue.length}`);
+		// Only log queuing when there are multiple items to reduce noise
+		if (this.queue.length > 1) {
+			console.log(`[RequestQueue] Queued ${request.priority} priority request. Queue size: ${this.queue.length}`);
+		}
 	}
 	
 	/**
