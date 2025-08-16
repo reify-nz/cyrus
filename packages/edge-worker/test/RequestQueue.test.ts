@@ -170,6 +170,12 @@ describe("RequestQueue", () => {
 			expect(stats).toHaveProperty('normalCount');
 			expect(stats).toHaveProperty('lowCount');
 			expect(stats).toHaveProperty('processing');
+			// And expected default values for an idle queue
+			expect(stats.queueLength).toBe(0);
+			expect(stats.criticalCount).toBe(0);
+			expect(stats.normalCount).toBe(0);
+			expect(stats.lowCount).toBe(0);
+			expect(stats.processing).toBe(false);
 		});
 	});
 
