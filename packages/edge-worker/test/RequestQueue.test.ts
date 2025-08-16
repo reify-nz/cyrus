@@ -7,12 +7,15 @@ describe("RequestQueue", () => {
 	let rateLimitTracker: RateLimitTracker;
 
 	beforeEach(() => {
+		vi.useFakeTimers();
 		vi.restoreAllMocks();
 		rateLimitTracker = new RateLimitTracker();
 		requestQueue = new RequestQueue(rateLimitTracker);
 	});
 
 	afterEach(() => {
+		// Restore real timers and mocks
+		vi.useRealTimers();
 		vi.restoreAllMocks();
 	});
 
@@ -25,6 +28,10 @@ describe("RequestQueue", () => {
 			};
 
 			const promise = requestQueue.enqueue(execute, "normal");
+			
+			// Advance timers to trigger processing
+			vi.runAllTimers();
+			
 			const result = await promise;
 
 			expect(executed).toBe(true);
@@ -55,6 +62,9 @@ describe("RequestQueue", () => {
 				requestQueue.enqueue(criticalExec, "critical"),
 				requestQueue.enqueue(normalExec, "normal")
 			];
+
+			// Advance timers to trigger processing
+			vi.runAllTimers();
 
 			await Promise.all(promises);
 
@@ -92,6 +102,9 @@ describe("RequestQueue", () => {
 			const lowPromise = requestQueue.enqueue(lowExecute, "low");
 			const criticalPromise = requestQueue.enqueue(criticalExecute, "critical");
 
+			// Advance timers to trigger processing
+			vi.runAllTimers();
+
 			// Critical should execute quickly
 			await criticalPromise;
 			expect(criticalExecuted).toBe(true);
@@ -103,6 +116,9 @@ describe("RequestQueue", () => {
 
 	describe("Error Handling", () => {
 		it("should handle rate limit errors with retry", async () => {
+			// Switch to real timers for this complex retry test
+			vi.useRealTimers();
+			
 			let attemptCount = 0;
 			const execute = async () => {
 				attemptCount++;
@@ -116,6 +132,9 @@ describe("RequestQueue", () => {
 			
 			expect(result).toBe("success");
 			expect(attemptCount).toBe(3); // Should retry on rate limit errors
+			
+			// Restore fake timers for next tests
+			vi.useFakeTimers();
 		});
 
 		it("should not retry non-rate-limit errors", async () => {
@@ -125,7 +144,12 @@ describe("RequestQueue", () => {
 				throw new Error("Regular error"); // Non-rate limit error
 			};
 
-			await expect(requestQueue.enqueue(execute, "normal")).rejects.toThrow("Regular error");
+			const promise = requestQueue.enqueue(execute, "normal");
+			
+			// Advance timers to trigger processing
+			vi.runAllTimers();
+			
+			await expect(promise).rejects.toThrow("Regular error");
 			
 			// Should not retry non-rate-limit errors
 			expect(attemptCount).toBe(1);
