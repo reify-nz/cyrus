@@ -494,6 +494,139 @@ describe("ClaudeRunner", () => {
                         expect(sessionInfo.sessionId).toBe("test-session");
                         vi.useRealTimers();
                 });
+
+                it("should handle malformed usage limit error message", async () => {
+                        const errorHandler = vi.fn();
+                        runner.on("error", errorHandler);
+
+                        const malformedError = new Error(
+                                "Claude usage limit reached. Your limit will reset at invalid time format.",
+                        );
+
+                        mockQuery.mockImplementation(async function* () {
+                                throw malformedError;
+                        });
+
+                        await runner.start("test");
+
+                        expect(errorHandler).toHaveBeenCalledWith(malformedError);
+                        expect(runner.isRunning()).toBe(false);
+                });
+
+                it("should handle usage limit error without time information", async () => {
+                        const errorHandler = vi.fn();
+                        runner.on("error", errorHandler);
+
+                        const noTimeError = new Error("Claude usage limit reached.");
+
+                        mockQuery.mockImplementation(async function* () {
+                                throw noTimeError;
+                        });
+
+                        await runner.start("test");
+
+                        expect(errorHandler).toHaveBeenCalledWith(noTimeError);
+                        expect(runner.isRunning()).toBe(false);
+                });
+
+                it("should handle 12pm correctly", async () => {
+                        vi.useFakeTimers();
+                        vi.setSystemTime(new Date("2024-01-01T11:00:00"));
+
+                        const usageError = new Error(
+                                "Claude usage limit reached. Your limit will reset at 12pm (Pacific/Auckland).",
+                        );
+
+                        mockQuery
+                                .mockImplementationOnce(async function* () {
+                                        throw usageError;
+                                })
+                                .mockImplementationOnce(async function* () {
+                                        yield {
+                                                type: "assistant",
+                                                message: { content: [] },
+                                                parent_tool_use_id: null,
+                                                session_id: "test-session",
+                                        } as any;
+                                });
+
+                        const startPromise = runner.start("test");
+
+                        // Should wait until 12:01pm (1 hour 1 minute)
+                        await vi.advanceTimersByTimeAsync(61 * 60 * 1000);
+
+                        const sessionInfo = await startPromise;
+
+                        expect(mockQuery).toHaveBeenCalledTimes(2);
+                        expect(sessionInfo.sessionId).toBe("test-session");
+                        vi.useRealTimers();
+                });
+
+                it("should handle 12am correctly", async () => {
+                        vi.useFakeTimers();
+                        vi.setSystemTime(new Date("2024-01-01T23:00:00"));
+
+                        const usageError = new Error(
+                                "Claude usage limit reached. Your limit will reset at 12am (Pacific/Auckland).",
+                        );
+
+                        mockQuery
+                                .mockImplementationOnce(async function* () {
+                                        throw usageError;
+                                })
+                                .mockImplementationOnce(async function* () {
+                                        yield {
+                                                type: "assistant",
+                                                message: { content: [] },
+                                                parent_tool_use_id: null,
+                                                session_id: "test-session",
+                                        } as any;
+                                });
+
+                        const startPromise = runner.start("test");
+
+                        // Should wait until 12:01am tomorrow (1 hour 1 minute)
+                        await vi.advanceTimersByTimeAsync(61 * 60 * 1000);
+
+                        const sessionInfo = await startPromise;
+
+                        expect(mockQuery).toHaveBeenCalledTimes(2);
+                        expect(sessionInfo.sessionId).toBe("test-session");
+                        vi.useRealTimers();
+                });
+
+                it("should handle time without minutes specified", async () => {
+                        vi.useFakeTimers();
+                        vi.setSystemTime(new Date("2024-01-01T20:00:00"));
+
+                        const usageError = new Error(
+                                "Claude usage limit reached. Your limit will reset at 9pm (Pacific/Auckland).",
+                        );
+
+                        mockQuery
+                                .mockImplementationOnce(async function* () {
+                                        throw usageError;
+                                })
+                                .mockImplementationOnce(async function* () {
+                                        yield {
+                                                type: "assistant",
+                                                message: { content: [] },
+                                                parent_tool_use_id: null,
+                                                session_id: "test-session",
+                                        } as any;
+                                });
+
+                        const startPromise = runner.start("test");
+
+                        // Should wait until 9:01pm (1 hour 1 minute)
+                        await vi.advanceTimersByTimeAsync(61 * 60 * 1000);
+
+                        const sessionInfo = await startPromise;
+
+                        expect(mockQuery).toHaveBeenCalledTimes(2);
+                        expect(sessionInfo.sessionId).toBe("test-session");
+                        vi.useRealTimers();
+                });
         });
 
 	describe("Session Info", () => {
