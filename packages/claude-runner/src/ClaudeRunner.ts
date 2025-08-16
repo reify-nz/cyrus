@@ -233,6 +233,17 @@ export class ClaudeRunner extends EventEmitter {
 		// Reset messages array
 		this.messages = [];
 
+		// Cancel any pending retry from previous session
+		if (this.pendingRetryResolve) {
+			this.pendingRetryResolve();
+			this.pendingRetryResolve = null;
+		}
+		if (this.pendingRetryTimer) {
+			clearTimeout(this.pendingRetryTimer);
+			this.pendingRetryTimer = null;
+		}
+		this.retryGeneration++;
+
 		// If a retry is needed due to usage limits, we'll store the promise here
 		let retryPromise: Promise<ClaudeSessionInfo> | null = null;
 

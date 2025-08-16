@@ -52,6 +52,9 @@ describe("ClaudeRunner", () => {
 		if (runner.isRunning()) {
 			runner.stop();
 		}
+		
+		// Reset all mocks to ensure test isolation
+		mockQuery.mockReset();
 	});
 
 	describe("Constructor & Initialization", () => {
@@ -628,7 +631,7 @@ describe("ClaudeRunner", () => {
                         vi.useRealTimers();
                 });
 
-                it.skip("should cancel retry when stop() is called during wait", async () => {
+                it("should cancel retry when stop() is called during wait", async () => {
                         vi.useFakeTimers();
                         vi.setSystemTime(new Date("2024-01-01T20:00:00"));
 
@@ -636,16 +639,29 @@ describe("ClaudeRunner", () => {
                                 "Claude usage limit reached. Your limit will reset at 8:30pm (Pacific/Auckland).",
                         );
 
-                        mockQuery.mockImplementation(async function* () {
-                                throw usageError;
-                        });
+                        // Mock to throw error once, then succeed (but we shouldn't reach the second call)
+                        mockQuery
+                                .mockImplementationOnce(async function* () {
+                                        throw usageError;
+                                })
+                                .mockImplementationOnce(async function* () {
+                                        yield {
+                                                type: "assistant",
+                                                message: { content: [] },
+                                                parent_tool_use_id: null,
+                                                session_id: "retry-session",
+                                        } as any;
+                                });
 
                         try {
                                 // Start should schedule a retry
                                 const resultPromise = runner.start("test");
 
-                                // Ensure all synchronous work is done
-                                await vi.runAllTimersAsync();
+                                // Let async operations complete without executing the retry timer
+                                await vi.advanceTimersByTimeAsync(100); // Small advance to process async work
+                                
+                                // Verify retry is scheduled but not executed yet
+                                expect(mockQuery).toHaveBeenCalledTimes(1);
                                 
                                 // Stop the runner (should cancel retry and resolve promise)
                                 runner.stop();
@@ -656,12 +672,13 @@ describe("ClaudeRunner", () => {
                                 // Should only call once (initial failure, no retry)
                                 expect(mockQuery).toHaveBeenCalledTimes(1);
                                 expect(runner.isRunning()).toBe(false);
+                                expect(result).toBeDefined();
                         } finally {
                                 vi.useRealTimers();
                         }
                 });
 
-                it.skip("should not retry if another session starts during wait", async () => {
+                it("should not retry if another session starts during wait", async () => {
                         vi.useFakeTimers();
                         vi.setSystemTime(new Date("2024-01-01T20:00:00"));
 
@@ -669,6 +686,7 @@ describe("ClaudeRunner", () => {
                                 "Claude usage limit reached. Your limit will reset at 8:30pm (Pacific/Auckland).",
                         );
 
+                        // First call fails with usage limit, second call succeeds
                         mockQuery
                                 .mockImplementationOnce(async function* () {
                                         throw usageError;
@@ -683,19 +701,26 @@ describe("ClaudeRunner", () => {
                                 });
 
                         try {
-                                // First session fails with usage limit
+                                // First session fails with usage limit and schedules retry
                                 const firstStartPromise = runner.start("test");
 
-                                // Process the failure
-                                await vi.runAllTimersAsync();
+                                // Let async operations complete without executing retry timer
+                                await vi.advanceTimersByTimeAsync(100);
+                                
+                                // Verify first session failed and retry is scheduled
+                                expect(mockQuery).toHaveBeenCalledTimes(1);
 
-                                // Start another session (should succeed)
+                                // Start another session during the wait (should succeed)
                                 const secondSessionInfo = await runner.start("test2");
+                                
+                                // Verify second session succeeded
+                                expect(mockQuery).toHaveBeenCalledTimes(2);
+                                expect(secondSessionInfo.sessionId).toBe("new-session");
 
-                                // First promise should resolve with current session (not retry)
+                                // First promise should resolve with current session info (not retry)
                                 const firstSessionInfo = await firstStartPromise;
 
-                                expect(mockQuery).toHaveBeenCalledTimes(2);
+                                // Both should reference the same successful session
                                 expect(firstSessionInfo.sessionId).toBe("new-session");
                                 expect(secondSessionInfo.sessionId).toBe("new-session");
                         } finally {
