@@ -138,6 +138,9 @@ export class ClaudeRunner extends EventEmitter {
 	private readableLogStream: WriteStream | null = null;
 	private messages: SDKMessage[] = [];
 	private streamingPrompt: StreamingPrompt | null = null;
+	private pendingRetryTimer: NodeJS.Timeout | null = null;
+	private retryGeneration = 0;
+	private pendingRetryResolve: (() => void) | null = null;
 
 	constructor(config: ClaudeRunnerConfig) {
 		super();
@@ -516,14 +519,26 @@ export class ClaudeRunner extends EventEmitter {
 			`[ClaudeRunner] Usage limit reached. Waiting until ${target.toLocaleString()} before retrying`,
 		);
 
-		return new Promise<void>((resolve) => 
-			setTimeout(resolve, waitMs),
-		).then(() =>
-			this.startWithPrompt(
+		// Capture current generation to detect cancellation
+		const gen = ++this.retryGeneration;
+		
+		return new Promise<void>((resolve) => {
+			this.pendingRetryResolve = resolve;
+			this.pendingRetryTimer = setTimeout(() => {
+				this.pendingRetryResolve = null;
+				resolve();
+			}, waitMs);
+		}).then(() => {
+			// If cancelled/superseded, or another session started, do not auto-restart
+			if (this.retryGeneration !== gen || this.isRunning()) {
+				return this.sessionInfo as ClaudeSessionInfo;
+			}
+			this.pendingRetryTimer = null;
+			return this.startWithPrompt(
 				stringPrompt ?? null,
 				streamingInitialPrompt,
-			),
-		);
+			);
+		});
 	}
 
 	/**
@@ -583,6 +598,21 @@ export class ClaudeRunner extends EventEmitter {
 			this.abortController.abort();
 			this.abortController = null;
 		}
+
+		// Cancel any pending retry timer to prevent ghost restarts
+		if (this.pendingRetryTimer) {
+			clearTimeout(this.pendingRetryTimer);
+			this.pendingRetryTimer = null;
+		}
+		
+		// Resolve the pending retry promise to unblock it
+		if (this.pendingRetryResolve) {
+			this.pendingRetryResolve();
+			this.pendingRetryResolve = null;
+		}
+		
+		// Invalidate any scheduled retry
+		this.retryGeneration++;
 
 		// Complete streaming prompt if in streaming mode
 		if (this.streamingPrompt) {

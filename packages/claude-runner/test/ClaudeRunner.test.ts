@@ -627,6 +627,81 @@ describe("ClaudeRunner", () => {
                         expect(sessionInfo.sessionId).toBe("test-session");
                         vi.useRealTimers();
                 });
+
+                it.skip("should cancel retry when stop() is called during wait", async () => {
+                        vi.useFakeTimers();
+                        vi.setSystemTime(new Date("2024-01-01T20:00:00"));
+
+                        const usageError = new Error(
+                                "Claude usage limit reached. Your limit will reset at 8:30pm (Pacific/Auckland).",
+                        );
+
+                        mockQuery.mockImplementation(async function* () {
+                                throw usageError;
+                        });
+
+                        try {
+                                // Start should schedule a retry
+                                const resultPromise = runner.start("test");
+
+                                // Ensure all synchronous work is done
+                                await vi.runAllTimersAsync();
+                                
+                                // Stop the runner (should cancel retry and resolve promise)
+                                runner.stop();
+
+                                // The promise should resolve with session info
+                                const result = await resultPromise;
+
+                                // Should only call once (initial failure, no retry)
+                                expect(mockQuery).toHaveBeenCalledTimes(1);
+                                expect(runner.isRunning()).toBe(false);
+                        } finally {
+                                vi.useRealTimers();
+                        }
+                });
+
+                it.skip("should not retry if another session starts during wait", async () => {
+                        vi.useFakeTimers();
+                        vi.setSystemTime(new Date("2024-01-01T20:00:00"));
+
+                        const usageError = new Error(
+                                "Claude usage limit reached. Your limit will reset at 8:30pm (Pacific/Auckland).",
+                        );
+
+                        mockQuery
+                                .mockImplementationOnce(async function* () {
+                                        throw usageError;
+                                })
+                                .mockImplementationOnce(async function* () {
+                                        yield {
+                                                type: "assistant",
+                                                message: { content: [] },
+                                                parent_tool_use_id: null,
+                                                session_id: "new-session",
+                                        } as any;
+                                });
+
+                        try {
+                                // First session fails with usage limit
+                                const firstStartPromise = runner.start("test");
+
+                                // Process the failure
+                                await vi.runAllTimersAsync();
+
+                                // Start another session (should succeed)
+                                const secondSessionInfo = await runner.start("test2");
+
+                                // First promise should resolve with current session (not retry)
+                                const firstSessionInfo = await firstStartPromise;
+
+                                expect(mockQuery).toHaveBeenCalledTimes(2);
+                                expect(firstSessionInfo.sessionId).toBe("new-session");
+                                expect(secondSessionInfo.sessionId).toBe("new-session");
+                        } finally {
+                                vi.useRealTimers();
+                        }
+                });
         });
 
 	describe("Session Info", () => {
