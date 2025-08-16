@@ -7,13 +7,16 @@ describe("RequestQueue", () => {
 	let rateLimitTracker: RateLimitTracker;
 
 	beforeEach(() => {
-		vi.useFakeTimers();
 		vi.restoreAllMocks();
+		vi.useFakeTimers();
 		rateLimitTracker = new RateLimitTracker();
 		requestQueue = new RequestQueue(rateLimitTracker);
 	});
 
 	afterEach(() => {
+		// Ensure no pending requests/timers leak across tests
+		requestQueue.clear();
+		vi.runOnlyPendingTimers();
 		// Restore real timers and mocks
 		vi.useRealTimers();
 		vi.restoreAllMocks();
