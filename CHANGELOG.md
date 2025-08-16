@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - Automatically pauses and resumes Claude sessions when hitting usage limits, waiting until the reset time plus one minute before retrying (cyrus-claude-runner)
+### Changed
+- Updated @anthropic-ai/claude-code from v1.0.80 to v1.0.81 for latest Claude Code improvements. See [Claude Code v1.0.81 changelog](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md#1081)
+
 ### Fixed
 - Fixed git worktree creation failures for sub-issues when parent branch doesn't exist remotely
   - Added proper remote branch existence checking before attempting worktree creation
