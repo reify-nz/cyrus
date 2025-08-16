@@ -174,7 +174,7 @@ describe("RequestQueue", () => {
 	});
 
 	describe("Infinite Loop Prevention (Critical Fix)", () => {
-		it("should break out of processing loop when deferring low-priority requests", () => {
+		it("should break out of processing loop when deferring low-priority requests", async () => {
 			// This is a unit test of the specific logic fix, not an integration test
 			// We're testing that the `break` statement is reached instead of `continue`
 			
@@ -187,13 +187,24 @@ describe("RequestQueue", () => {
 			// Verify low priority should be denied
 			expect(rateLimitTracker.shouldAllowRequest('low')).toBe(false);
 
-			// The key insight: the fix changes the logic from `continue` to `break`
-			// When only low-priority requests are in the queue and rate limiting is active:
-			// - Before fix: continue -> infinite loop
-			// - After fix: break -> loop exits, yields to scheduler
-			
-			// This test documents the fix without requiring complex async timing
-			expect(true).toBe(true); // If we get here, the basic logic is sound
+			let executed = false;
+			const lowPromise = requestQueue.enqueue(async () => {
+				executed = true;
+				return "low";
+			}, "low");
+
+			// Advance exactly one batch window
+			await vi.advanceTimersByTimeAsync(rateLimitTracker.getRecommendedBatchWindow());
+
+			// Should have yielded after deferring the low-priority item
+			const { queueLength, processing } = requestQueue.getStatus();
+			expect(processing).toBe(false);
+			expect(queueLength).toBe(1);
+			expect(executed).toBe(false);
+
+			// Clean up the deferred work to avoid dangling timers/promises
+			requestQueue.clear();
+			await expect(lowPromise).rejects.toThrow("Queue cleared");
 		});
 	});
 });
