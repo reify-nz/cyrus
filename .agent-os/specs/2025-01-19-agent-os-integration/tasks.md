@@ -12,12 +12,12 @@
   - [x] 1.7 Verify all tests pass
 
 - [ ] 2. Implement Traditional Prompt Adapter
-  - [ ] 2.1 Write tests for TraditionalPromptAdapter
-  - [ ] 2.2 Create TraditionalPromptAdapter class implementing interface
-  - [ ] 2.3 Wrap buildPromptV2 method in adapter
-  - [ ] 2.4 Wrap buildLabelBasedPrompt method in adapter
-  - [ ] 2.5 Wrap buildMentionPrompt method in adapter
-  - [ ] 2.6 Implement getToolRestrictions using existing buildAllowedTools
+  - [x] 2.1 Write tests for TraditionalPromptAdapter
+  - [x] 2.2 Create TraditionalPromptAdapter class implementing interface
+  - [x] 2.3 Wrap buildPromptV2 method in adapter
+  - [x] 2.4 Wrap buildLabelBasedPrompt method in adapter
+  - [x] 2.5 Wrap buildMentionPrompt method in adapter
+  - [x] 2.6 Implement getToolRestrictions using existing buildAllowedTools
   - [ ] 2.7 Ensure all existing EdgeWorker tests still pass
   - [ ] 2.8 Verify all tests pass
 

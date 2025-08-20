@@ -1,6 +1,9 @@
 import type { RepositoryConfig } from "../types.js";
 import type { PromptSystemAdapter } from "./PromptSystemAdapter.js";
 
+/** Default adapter type when none is specified */
+const DEFAULT_ADAPTER_TYPE = "traditional";
+
 /**
  * Factory for creating prompt system adapters
  * Manages adapter lifecycle and caching
@@ -42,7 +45,7 @@ export class PromptSystemFactory {
 		}
 
 		// Determine adapter type
-		const adapterType = repository.promptSystem || "traditional";
+		const adapterType = repository.promptSystem || DEFAULT_ADAPTER_TYPE;
 
 		// Get adapter constructor
 		const AdapterClass = this.adapterRegistry.get(adapterType);
@@ -56,12 +59,19 @@ export class PromptSystemFactory {
 
 		// Create and initialize adapter
 		const adapter = new AdapterClass();
-		await adapter.initialize(repository);
-
-		// Cache for future use
-		this.adapterCache.set(repository.id, adapter);
-
-		return adapter;
+		
+		try {
+			await adapter.initialize(repository);
+			// Only cache successfully initialized adapters
+			this.adapterCache.set(repository.id, adapter);
+			return adapter;
+		} catch (error) {
+			// Don't cache failed adapters
+			const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+			throw new Error(
+				`Failed to initialize ${adapterType} adapter for repository ${repository.id}: ${errorMessage}`
+			);
+		}
 	}
 
 	/**
@@ -70,7 +80,7 @@ export class PromptSystemFactory {
 	 * @returns Cached adapter or null
 	 */
 	static getCachedAdapter(repositoryId: string): PromptSystemAdapter | null {
-		return this.adapterCache.get(repositoryId) || null;
+		return this.adapterCache.get(repositoryId) ?? null;
 	}
 
 	/**

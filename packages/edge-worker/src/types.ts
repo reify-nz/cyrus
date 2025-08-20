@@ -32,6 +32,8 @@ export interface RepositoryConfig {
 	allowedTools?: string[]; // Override Claude tools for this repository (overrides defaultAllowedTools)
 	mcpConfigPath?: string | string[]; // Path(s) to MCP configuration JSON file(s) (format: {"mcpServers": {...}})
 	appendInstruction?: string; // Additional instruction to append to the prompt in XML-style wrappers
+	promptSystem?: string; // Type of prompt system adapter to use (default: "traditional")
+	agentOSConfig?: Record<string, any>; // Agent OS specific configuration overrides
 
 	// Label-based system prompt configuration
 	labelPrompts?: {

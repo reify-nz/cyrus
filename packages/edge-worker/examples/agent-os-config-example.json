@@ -1,0 +1,309 @@
+{
+  "version": "1.0",
+  "settings": {
+    "debug": false,
+    "maxExecutionTime": 3600,
+    "failureStrategy": "retry",
+    "maxRetries": 2,
+    "contextPersistence": {
+      "enabled": true,
+      "storage": "memory",
+      "ttl": 86400
+    }
+  },
+  "mainInstructionFile": "agent-os/instructions/main.md",
+  "subagents": [
+    {
+      "id": "analyzer",
+      "name": "Code Analyzer",
+      "description": "Analyzes code to identify issues and understand context",
+      "instructionFile": "agent-os/instructions/analyzer.md",
+      "capabilities": [
+        {
+          "type": "read",
+          "scope": ["**/*.ts", "**/*.js", "**/*.json"]
+        },
+        {
+          "type": "analyze"
+        }
+      ],
+      "inputs": [
+        {
+          "name": "issue",
+          "type": "issue",
+          "required": true,
+          "description": "The Linear issue to analyze"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "analysis",
+          "type": "object",
+          "description": "Analysis results including identified problems and context"
+        }
+      ],
+      "resourceLimits": {
+        "maxExecutionTime": 300,
+        "maxApiCalls": 50
+      }
+    },
+    {
+      "id": "fixer",
+      "name": "Bug Fixer",
+      "description": "Implements fixes for identified bugs",
+      "instructionFile": "agent-os/instructions/fixer.md",
+      "capabilities": [
+        {
+          "type": "read"
+        },
+        {
+          "type": "write",
+          "scope": ["src/**/*.ts", "src/**/*.js"]
+        }
+      ],
+      "inputs": [
+        {
+          "name": "analysis",
+          "type": "object",
+          "required": true,
+          "description": "Analysis from the analyzer stage"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "changes",
+          "type": "object",
+          "description": "List of file changes made"
+        }
+      ],
+      "resourceLimits": {
+        "maxExecutionTime": 600,
+        "maxApiCalls": 100
+      }
+    },
+    {
+      "id": "tester",
+      "name": "Test Runner",
+      "description": "Runs tests to verify fixes",
+      "instructionFile": "agent-os/instructions/tester.md",
+      "capabilities": [
+        {
+          "type": "read"
+        },
+        {
+          "type": "test"
+        }
+      ],
+      "inputs": [
+        {
+          "name": "changes",
+          "type": "object",
+          "required": true,
+          "description": "Changes made by the fixer"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "testResults",
+          "type": "report",
+          "description": "Test execution results"
+        }
+      ],
+      "resourceLimits": {
+        "maxExecutionTime": 900,
+        "maxApiCalls": 200
+      }
+    },
+    {
+      "id": "reporter",
+      "name": "Report Generator",
+      "description": "Generates a summary report of the fix",
+      "instructionFile": "agent-os/instructions/reporter.md",
+      "capabilities": [
+        {
+          "type": "read"
+        },
+        {
+          "type": "analyze"
+        }
+      ],
+      "inputs": [
+        {
+          "name": "analysis",
+          "type": "object",
+          "required": true
+        },
+        {
+          "name": "changes",
+          "type": "object",
+          "required": true
+        },
+        {
+          "name": "testResults",
+          "type": "report",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "name": "report",
+          "type": "string",
+          "description": "Markdown-formatted summary report"
+        }
+      ]
+    }
+  ],
+  "workflows": [
+    {
+      "id": "bug-fix",
+      "name": "Bug Fix Workflow",
+      "description": "Complete workflow for analyzing and fixing bugs",
+      "stages": [
+        {
+          "id": "analyze",
+          "name": "Analyze Issue",
+          "subagentId": "analyzer",
+          "config": {
+            "depth": "comprehensive"
+          }
+        },
+        {
+          "id": "fix",
+          "name": "Implement Fix",
+          "subagentId": "fixer",
+          "dependencies": ["analyze"],
+          "inputMappings": [
+            {
+              "from": "analyze.outputs.analysis",
+              "to": "analysis"
+            }
+          ],
+          "retry": {
+            "maxAttempts": 2,
+            "backoff": "exponential",
+            "initialDelay": 1000
+          }
+        },
+        {
+          "id": "test",
+          "name": "Run Tests",
+          "subagentId": "tester",
+          "dependencies": ["fix"],
+          "inputMappings": [
+            {
+              "from": "fix.outputs.changes",
+              "to": "changes"
+            }
+          ],
+          "skipConditions": [
+            {
+              "type": "expression",
+              "value": "fix.outputs.changes.length === 0"
+            }
+          ]
+        },
+        {
+          "id": "report",
+          "name": "Generate Report",
+          "subagentId": "reporter",
+          "dependencies": ["analyze", "fix", "test"],
+          "inputMappings": [
+            {
+              "from": "analyze.outputs.analysis",
+              "to": "analysis"
+            },
+            {
+              "from": "fix.outputs.changes",
+              "to": "changes"
+            },
+            {
+              "from": "test.outputs.testResults",
+              "to": "testResults",
+              "default": { "status": "skipped" }
+            }
+          ]
+        }
+      ],
+      "contextStrategy": {
+        "type": "selective",
+        "fields": {
+          "include": ["issue", "errors", "changes", "testResults"],
+          "exclude": ["internalMetadata"]
+        }
+      },
+      "successCriteria": {
+        "requiredStages": ["analyze", "fix", "report"],
+        "conditions": [
+          "test.outputs.testResults.passed === true || test.status === 'skipped'"
+        ]
+      },
+      "settings": {
+        "maxIterations": 3,
+        "timeout": 1800,
+        "priority": "normal"
+      }
+    },
+    {
+      "id": "quick-fix",
+      "name": "Quick Fix Workflow",
+      "description": "Simplified workflow for minor fixes",
+      "stages": [
+        {
+          "id": "analyze-quick",
+          "name": "Quick Analysis",
+          "subagentId": "analyzer",
+          "config": {
+            "depth": "quick"
+          }
+        },
+        {
+          "id": "fix-quick",
+          "name": "Apply Fix",
+          "subagentId": "fixer",
+          "dependencies": ["analyze-quick"],
+          "inputMappings": [
+            {
+              "from": "analyze-quick.outputs.analysis",
+              "to": "analysis"
+            }
+          ]
+        }
+      ],
+      "contextStrategy": {
+        "type": "summary",
+        "summarySettings": {
+          "maxLength": 500,
+          "format": "markdown"
+        }
+      },
+      "settings": {
+        "timeout": 600,
+        "priority": "high"
+      }
+    }
+  ],
+  "labelMappings": [
+    {
+      "label": "bug",
+      "workflowId": "bug-fix",
+      "priority": 10
+    },
+    {
+      "label": "critical-bug",
+      "workflowId": "bug-fix",
+      "priority": 20,
+      "conditions": ["issue.priority === 'urgent'"]
+    },
+    {
+      "label": "quick-fix",
+      "workflowId": "quick-fix",
+      "priority": 15
+    },
+    {
+      "label": "typo",
+      "workflowId": "quick-fix",
+      "priority": 5
+    }
+  ],
+  "defaultWorkflow": "bug-fix"
+}

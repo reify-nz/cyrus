@@ -87,6 +87,19 @@ export interface PromptSystemAdapter {
 export abstract class BasePromptSystemAdapter implements PromptSystemAdapter {
 	protected config?: RepositoryConfig;
 
+	/**
+	 * Ensure the adapter has been initialized
+	 * @protected
+	 * @throws {Error} If adapter not initialized
+	 */
+	protected ensureInitialized(): void {
+		if (!this.config) {
+			throw new Error(
+				"Adapter not initialized. Call initialize() with a RepositoryConfig first."
+			);
+		}
+	}
+
 	async initialize(config: RepositoryConfig): Promise<void> {
 		this.config = config;
 	}
