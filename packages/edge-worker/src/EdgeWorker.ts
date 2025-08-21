@@ -53,7 +53,7 @@ import type {
 } from "./types.js";
 import { PromptSystemFactory } from "./adapters/PromptSystemFactory.js";
 import type { PromptContext, PromptSystemAdapter } from "./adapters/PromptSystemAdapter.js";
-import { registerDefaultAdapters } from "./adapters/register-adapters.js";
+import { registerPromptAdapters } from "./adapters/register-adapters.js";
 
 export declare interface EdgeWorker {
 	on<K extends keyof EdgeWorkerEvents>(
@@ -85,6 +85,7 @@ export class EdgeWorker extends EventEmitter {
 	private sharedApplicationServer: SharedApplicationServer;
 	private static promptSystemFactoryInitialized = false;
 	private promptAdapter: PromptSystemAdapter | null = null;
+	private promptAdapters: Map<string, PromptSystemAdapter> = new Map();
 
 	constructor(config: EdgeWorkerConfig) {
 		super();
@@ -93,7 +94,7 @@ export class EdgeWorker extends EventEmitter {
 
 		// Initialize the prompt system factory once
 		if (!EdgeWorker.promptSystemFactoryInitialized) {
-			registerDefaultAdapters();
+			registerPromptAdapters();
 			EdgeWorker.promptSystemFactoryInitialized = true;
 		}
 
@@ -832,25 +833,26 @@ export class EdgeWorker extends EventEmitter {
 			`[EdgeWorker] Building initial prompt for issue ${fullIssue.identifier}`,
 		);
 		try {
-			// Choose the appropriate prompt builder based on trigger type and system prompt
-			const promptResult = isMentionTriggered
-				? await this.buildMentionPrompt(
+		// Choose the appropriate prompt builder based on trigger type and system prompt
+		const promptResult = isMentionTriggered
+			? await this.buildMentionPrompt(
+					fullIssue,
+					agentSession,
+					attachmentResult.manifest,
+					repository,
+				)
+			: systemPrompt
+				? await this.buildLabelBasedPrompt(
 						fullIssue,
-						agentSession,
+						repository,
 						attachmentResult.manifest,
 					)
-				: systemPrompt
-					? await this.buildLabelBasedPrompt(
-							fullIssue,
-							repository,
-							attachmentResult.manifest,
-						)
-					: await this.buildPromptV2(
-							fullIssue,
-							repository,
-							undefined,
-							attachmentResult.manifest,
-						);
+				: await this.buildPromptV2(
+						fullIssue,
+						repository,
+						undefined,
+						attachmentResult.manifest,
+					);
 
 			const { prompt, version: userPromptVersion } = promptResult;
 
@@ -1332,30 +1334,47 @@ export class EdgeWorker extends EventEmitter {
 	/**
 	 * Get or create prompt adapter for a repository
 	 */
-	private getPromptAdapter(repository: RepositoryConfig): PromptSystemAdapter | null {
+	private async getPromptAdapter(repository: RepositoryConfig): Promise<PromptSystemAdapter | null> {
+		// Check instance-level cache first
+		const repoKey = repository.id || repository.name;
+		const cached = this.promptAdapters.get(repoKey);
+		if (cached) {
+			return cached;
+		}
+
+		// Try to get factory-cached adapter
+		const cachedAdapter = PromptSystemFactory.getCachedAdapter(repository.id);
+		if (cachedAdapter) {
+			// Store in instance cache
+			this.promptAdapters.set(repoKey, cachedAdapter);
+			return cachedAdapter;
+		}
+
 		// If repository has a prompt system type configured, use it
 		if (repository.promptSystem) {
-			const adapter = PromptSystemFactory.getInstance().createAdapter(repository.promptSystem, {
-				repositoryPath: repository.repositoryPath,
-				globalInstructionsPath: join(homedir(), '.agent-os'),
-			});
-			
-			if (adapter) {
+			try {
+				const adapter = await PromptSystemFactory.createAdapter(repository);
 				console.log(`[EdgeWorker] Using ${repository.promptSystem} prompt adapter for repository ${repository.name}`);
+				// Cache the adapter
+				this.promptAdapters.set(repoKey, adapter);
 				return adapter;
+			} catch (error) {
+				console.error(`[EdgeWorker] Failed to create ${repository.promptSystem} adapter:`, error);
 			}
 		}
 		
 		// Check if global prompt system is configured
 		if (this.config.features?.promptSystem) {
-			const adapter = PromptSystemFactory.getInstance().createAdapter(this.config.features.promptSystem, {
-				repositoryPath: repository.repositoryPath,
-				globalInstructionsPath: join(homedir(), '.agent-os'),
-			});
-			
-			if (adapter) {
+			try {
+				// Create a temporary repository config with the global prompt system
+				const tempRepo = { ...repository, promptSystem: this.config.features.promptSystem };
+				const adapter = await PromptSystemFactory.createAdapter(tempRepo);
 				console.log(`[EdgeWorker] Using global ${this.config.features.promptSystem} prompt adapter`);
+				// Cache the adapter
+				this.promptAdapters.set(repoKey, adapter);
 				return adapter;
+			} catch (error) {
+				console.error(`[EdgeWorker] Failed to create global ${this.config.features.promptSystem} adapter:`, error);
 			}
 		}
 		
@@ -1378,7 +1397,7 @@ export class EdgeWorker extends EventEmitter {
 		);
 
 		// Try to use adapter if available
-		const adapter = this.getPromptAdapter(repository);
+		const adapter = await this.getPromptAdapter(repository);
 		if (adapter) {
 			try {
 				// Build context for adapter
@@ -1406,17 +1425,9 @@ export class EdgeWorker extends EventEmitter {
 				};
 
 				const result = await adapter.buildPrompt(context);
-				let prompt = result.prompt;
 				
-				// Add attachment manifest if not already included by adapter
-				if (attachmentManifest && !prompt.includes(attachmentManifest)) {
-					prompt = `${prompt}\n\n${attachmentManifest}`;
-				}
-				
-				// Add last message marker
-				if (!prompt.includes(LAST_MESSAGE_MARKER)) {
-					prompt = `${prompt}${LAST_MESSAGE_MARKER}`;
-				}
+				// Use the safe assembly method
+				const prompt = this.assemblePrompt(result.prompt, attachmentManifest);
 				
 				console.log(
 					`[EdgeWorker] Label-based prompt built using adapter, length: ${prompt.length} characters`,
@@ -1455,7 +1466,7 @@ export class EdgeWorker extends EventEmitter {
 			const baseBranch = await this.determineBaseBranch(issue, repository);
 
 			// Build the simplified prompt with only essential variables
-			let prompt = template
+			const basePrompt = template
 				.replace(/{{repository_name}}/g, repository.name)
 				.replace(/{{base_branch}}/g, baseBranch)
 				.replace(/{{issue_id}}/g, issue.id || "")
@@ -1467,14 +1478,9 @@ export class EdgeWorker extends EventEmitter {
 				)
 				.replace(/{{issue_url}}/g, issue.url || "");
 
-			if (attachmentManifest) {
-				console.log(
-					`[EdgeWorker] Adding attachment manifest to label-based prompt, length: ${attachmentManifest.length} characters`,
-				);
-				prompt = `${prompt}\n\n${attachmentManifest}`;
-			}
-
-			prompt = `${prompt}${LAST_MESSAGE_MARKER}`;
+			// Use the safe assembly method
+			const prompt = this.assemblePrompt(basePrompt, attachmentManifest);
+			
 			console.log(
 				`[EdgeWorker] Label-based prompt built successfully, length: ${prompt.length} characters`,
 			);
@@ -1488,7 +1494,7 @@ export class EdgeWorker extends EventEmitter {
 	/**
 	 * Build prompt for mention-triggered sessions
 	 * @param issue Full Linear issue object
-	 * @param repository Repository configuration
+	 * @param repository Repository configuration (optional for adapter selection)
 	 * @param agentSession The agent session containing the mention
 	 * @param attachmentManifest Optional attachment manifest to append
 	 * @returns The constructed prompt and optional version tag
@@ -1497,17 +1503,66 @@ export class EdgeWorker extends EventEmitter {
 		issue: LinearIssue,
 		agentSession: LinearWebhookAgentSession,
 		attachmentManifest: string = "",
+		repository?: RepositoryConfig,
 	): Promise<{ prompt: string; version?: string }> {
 		try {
 			console.log(
 				`[EdgeWorker] Building mention prompt for issue ${issue.identifier}`,
 			);
 
+			// Try to use adapter if repository is provided
+			if (repository) {
+				const adapter = await this.getPromptAdapter(repository);
+				if (adapter) {
+					try {
+						// Build context for adapter
+						const baseBranch = await this.determineBaseBranch(issue, repository);
+						const mentionContent = agentSession.comment?.body || "";
+						const context: PromptContext = {
+							repository: {
+								name: repository.name,
+								path: repository.repositoryPath,
+								baseBranch
+							},
+							issue: {
+								id: issue.id,
+								identifier: issue.identifier,
+								title: issue.title || '',
+								description: issue.description || undefined,
+								url: issue.url,
+								state: (await issue.state)?.name || 'Unknown',
+								priority: issue.priority?.toString() || 'None',
+								branchName: issue.branchName
+							},
+							session: {
+								type: 'mention',
+								mentionComment: mentionContent,
+								attachmentManifest: attachmentManifest || undefined
+							}
+						};
+
+						const result = await adapter.buildPrompt(context);
+						
+						// Use the safe assembly method
+						const prompt = this.assemblePrompt(result.prompt, attachmentManifest);
+						
+						console.log(
+							`[EdgeWorker] Mention prompt built using adapter, length: ${prompt.length} characters`,
+						);
+						return { prompt, version: result.metadata?.version };
+					} catch (error) {
+						console.error(`[EdgeWorker] Error using adapter for mention prompt:`, error);
+						// Fall through to legacy implementation
+					}
+				}
+			}
+
+			// Legacy implementation
 			// Get the mention comment body
 			const mentionContent = agentSession.comment?.body || "";
 
 			// Build a simple prompt focused on the mention
-			let prompt = `You were mentioned in a Linear comment. Please help with the following request.
+			const basePrompt = `You were mentioned in a Linear comment. Please help with the following request.
 
 <linear_issue>
   <id>${issue.id}</id>
@@ -1522,12 +1577,8 @@ ${mentionContent}
 
 IMPORTANT: You were specifically mentioned in the comment above. Focus on addressing the specific question or request in the mention. You can use the Linear MCP tools to fetch additional context about the issue if needed.`;
 
-			// Append attachment manifest if any
-			if (attachmentManifest) {
-				prompt = `${prompt}\n\n${attachmentManifest}`;
-			}
-
-			prompt = `${prompt}${LAST_MESSAGE_MARKER}`;
+			// Use the safe assembly method
+			const prompt = this.assemblePrompt(basePrompt, attachmentManifest);
 			return { prompt };
 		} catch (error) {
 			console.error(`[EdgeWorker] Error building mention prompt:`, error);
@@ -1548,6 +1599,70 @@ IMPORTANT: You were specifically mentioned in the comment above. Focus on addres
 		const version = versionTagMatch ? versionTagMatch[1] : undefined;
 		// Return undefined for empty strings
 		return version?.trim() ? version : undefined;
+	}
+
+	/**
+	 * Safely assemble a prompt with proper validation and formatting
+	 * Ensures attachment manifest and LAST_MESSAGE_MARKER are properly included
+	 * @param basePrompt The base prompt content
+	 * @param attachmentManifest Optional attachment manifest to append
+	 * @param includeMarker Whether to include the LAST_MESSAGE_MARKER (default: true)
+	 * @returns The properly assembled prompt
+	 */
+	private assemblePrompt(
+		basePrompt: string,
+		attachmentManifest?: string,
+		includeMarker: boolean = true,
+	): string {
+		if (!basePrompt) {
+			console.warn("[EdgeWorker] assemblePrompt called with empty base prompt");
+			basePrompt = "";
+		}
+
+		let prompt = basePrompt;
+
+		// Add attachment manifest if provided and not already included
+		if (attachmentManifest && attachmentManifest.trim()) {
+			// Check if the attachment manifest is already in the prompt
+			if (!prompt.includes(attachmentManifest)) {
+				// Ensure proper spacing before attachment manifest
+				if (!prompt.endsWith("\n")) {
+					prompt += "\n";
+				}
+				prompt += `\n${attachmentManifest}`;
+				console.log(
+					`[EdgeWorker] Added attachment manifest (${attachmentManifest.length} chars) to prompt`,
+				);
+			} else {
+				console.log(
+					"[EdgeWorker] Attachment manifest already present in prompt, skipping duplicate",
+				);
+			}
+		}
+
+		// Add LAST_MESSAGE_MARKER if requested and not already included
+		if (includeMarker && !prompt.includes(LAST_MESSAGE_MARKER)) {
+			// Don't add extra newlines before marker - it already has them in its definition
+			prompt += LAST_MESSAGE_MARKER;
+			console.log("[EdgeWorker] Added LAST_MESSAGE_MARKER to prompt");
+		} else if (includeMarker && prompt.includes(LAST_MESSAGE_MARKER)) {
+			console.log(
+				"[EdgeWorker] LAST_MESSAGE_MARKER already present in prompt, skipping duplicate",
+			);
+		}
+
+		// Validate final prompt
+		if (includeMarker && !prompt.includes(LAST_MESSAGE_MARKER)) {
+			console.error(
+				"[EdgeWorker] ERROR: LAST_MESSAGE_MARKER missing from final prompt!",
+			);
+		}
+
+		console.log(
+			`[EdgeWorker] Final assembled prompt length: ${prompt.length} characters`,
+		);
+
+		return prompt;
 	}
 
 	/**
@@ -1761,42 +1876,79 @@ ${reply.body}
 		);
 
 		try {
-			// Use custom template if provided (repository-specific takes precedence)
+			// Fetch issue state once and reuse
+			const issueState = await issue.state;
+			const stateName = issueState?.name || "Unknown";
+			
+			const adapter = await this.getPromptAdapter(repository);
+			if (adapter) {
+				const promptContext = {
+					repository: {
+						name: repository.name,
+						baseBranch: await this.determineBaseBranch(issue, repository),
+						repositoryPath: repository.repositoryPath,
+					},
+					issue: {
+						identifier: issue.identifier || "",
+						title: issue.title || "",
+						description: issue.description || "",
+						url: issue.url || "",
+						stateName: stateName,
+						priority: issue.priority?.toString() || "None",
+						branch: this.sanitizeBranchName(issue.branchName),
+					},
+					session: {
+						attachmentManifest,
+					},
+				};
+
+				try {
+					let { prompt, version } = await adapter.buildPrompt(promptContext);
+					console.log(
+						`[EdgeWorker] Prompt successfully built using adapter for issue ${issue.identifier}`,
+					);
+
+					// Append the attachment manifest if not included by the adapter
+					if (!prompt.includes(attachmentManifest) && attachmentManifest) {
+						prompt += `\n\n${attachmentManifest}`;
+					}
+
+					return { prompt: `${prompt}${LAST_MESSAGE_MARKER}`, version };
+				} catch (adaptError) {
+					console.error(
+						`[EdgeWorker] Adapter failed to build prompt, fallback to legacy template:`,
+						adaptError,
+					);
+				}
+			}
+
+			// Continue with legacy template loading when adapter is absent or fails
 			let templatePath =
 				repository.promptTemplatePath ||
 				this.config.features?.promptTemplatePath;
 
-			// If no custom template, use the v2 template
 			if (!templatePath) {
 				const __filename = fileURLToPath(import.meta.url);
 				const __dirname = dirname(__filename);
 				templatePath = resolve(__dirname, "../prompt-template-v2.md");
 			}
 
-			// Load the template
 			console.log(`[EdgeWorker] Loading prompt template from: ${templatePath}`);
 			const template = await readFile(templatePath, "utf-8");
 			console.log(
 				`[EdgeWorker] Template loaded, length: ${template.length} characters`,
 			);
 
-			// Extract and log version tag if present
 			const templateVersion = this.extractVersionTag(template);
 			if (templateVersion) {
 				console.log(`[EdgeWorker] Prompt template version: ${templateVersion}`);
 			}
 
-			// Get state name from Linear API
-			const state = await issue.state;
-			const stateName = state?.name || "Unknown";
-
-			// Determine the base branch considering parent issues
+			// Use the stateName already fetched at the beginning of the method
 			const baseBranch = await this.determineBaseBranch(issue, repository);
 
-			// Get formatted comment threads
-			const linearClient = this.linearClients.get(repository.id);
 			let commentThreads = "No comments yet.";
-
+			const linearClient = this.linearClients.get(repository.id);
 			if (linearClient && issue.id) {
 				try {
 					console.log(
@@ -1805,7 +1957,6 @@ ${reply.body}
 					const comments = await linearClient.comments({
 						filter: { issue: { id: { eq: issue.id } } },
 					});
-
 					const commentNodes = comments.nodes;
 					if (commentNodes.length > 0) {
 						commentThreads = await this.formatCommentThreads(commentNodes);
@@ -1818,49 +1969,39 @@ ${reply.body}
 				}
 			}
 
-			// Build the prompt with all variables
 			let prompt = template
 				.replace(/{{repository_name}}/g, repository.name)
 				.replace(/{{issue_id}}/g, issue.id || "")
 				.replace(/{{issue_identifier}}/g, issue.identifier || "")
 				.replace(/{{issue_title}}/g, issue.title || "")
-				.replace(
-					/{{issue_description}}/g,
-					issue.description || "No description provided",
-				)
+				.replace(/{{issue_description}}/g, issue.description || "No description provided")
 				.replace(/{{issue_state}}/g, stateName)
 				.replace(/{{issue_priority}}/g, issue.priority?.toString() || "None")
 				.replace(/{{issue_url}}/g, issue.url || "")
 				.replace(/{{comment_threads}}/g, commentThreads)
-				.replace(
-					/{{working_directory}}/g,
+				.replace(/{{working_directory}}/g,
 					this.config.handlers?.createWorkspace
 						? "Will be created based on issue"
-						: repository.repositoryPath,
-				)
+						: repository.repositoryPath)
 				.replace(/{{base_branch}}/g, baseBranch)
 				.replace(/{{branch_name}}/g, this.sanitizeBranchName(issue.branchName));
 
-			// Handle the optional new comment section
 			if (newComment) {
-				// Replace the conditional block
 				const newCommentSection = `<new_comment_to_address>
-	<author>{{new_comment_author}}</author>
-	<timestamp>{{new_comment_timestamp}}</timestamp>
-	<content>
+<author>{{new_comment_author}}</author>
+<timestamp>{{new_comment_timestamp}}</timestamp>
+<content>
 {{new_comment_content}}
-	</content>
+</content>
 </new_comment_to_address>
 
 IMPORTANT: Focus specifically on addressing the new comment above. This is a new request that requires your attention.`;
 
 				prompt = prompt.replace(
 					/{{#if new_comment}}[\s\S]*?{{\/if}}/g,
-					newCommentSection,
+					newCommentSection
 				);
 
-				// Now replace the new comment variables
-				// We'll need to fetch the comment author
 				let authorName = "Unknown";
 				if (linearClient) {
 					try {
@@ -1880,11 +2021,9 @@ IMPORTANT: Focus specifically on addressing the new comment above. This is a new
 					.replace(/{{new_comment_timestamp}}/g, new Date().toLocaleString())
 					.replace(/{{new_comment_content}}/g, newComment.body || "");
 			} else {
-				// Remove the new comment section entirely
 				prompt = prompt.replace(/{{#if new_comment}}[\s\S]*?{{\/if}}/g, "");
 			}
 
-			// Append attachment manifest if provided
 			if (attachmentManifest) {
 				console.log(
 					`[EdgeWorker] Adding attachment manifest, length: ${attachmentManifest.length} characters`,
@@ -1892,7 +2031,6 @@ IMPORTANT: Focus specifically on addressing the new comment above. This is a new
 				prompt = `${prompt}\n\n${attachmentManifest}`;
 			}
 
-			// Append repository-specific instruction if provided
 			if (repository.appendInstruction) {
 				console.log(`[EdgeWorker] Adding repository-specific instruction`);
 				prompt = `${prompt}\n\n<repository-specific-instruction>\n${repository.appendInstruction}\n</repository-specific-instruction>`;
@@ -1907,10 +2045,7 @@ IMPORTANT: Focus specifically on addressing the new comment above. This is a new
 		} catch (error) {
 			console.error("[EdgeWorker] Failed to load prompt template:", error);
 
-			// Fallback to simple prompt
-			const state = await issue.state;
-			const stateName = state?.name || "Unknown";
-
+			// Fallback to simple prompt - use stateName already fetched
 			// Determine the base branch considering parent issues
 			const baseBranch = await this.determineBaseBranch(issue, repository);
 
