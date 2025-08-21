@@ -51,6 +51,9 @@ import type {
 	LinearAgentSessionData,
 	RepositoryConfig,
 } from "./types.js";
+import { PromptSystemFactory } from "./adapters/PromptSystemFactory.js";
+import type { PromptContext, PromptSystemAdapter } from "./adapters/PromptSystemAdapter.js";
+import { registerDefaultAdapters } from "./adapters/register-adapters.js";
 
 export declare interface EdgeWorker {
 	on<K extends keyof EdgeWorkerEvents>(
@@ -80,11 +83,19 @@ export class EdgeWorker extends EventEmitter {
 	private ndjsonClients: Map<string, NdjsonClient> = new Map(); // listeners for webhook events, one per linear token
 	private persistenceManager: PersistenceManager;
 	private sharedApplicationServer: SharedApplicationServer;
+	private static promptSystemFactoryInitialized = false;
+	private promptAdapter: PromptSystemAdapter | null = null;
 
 	constructor(config: EdgeWorkerConfig) {
 		super();
 		this.config = config;
 		this.persistenceManager = new PersistenceManager();
+
+		// Initialize the prompt system factory once
+		if (!EdgeWorker.promptSystemFactoryInitialized) {
+			registerDefaultAdapters();
+			EdgeWorker.promptSystemFactoryInitialized = true;
+		}
 
 		// Initialize shared application server
 		const serverPort = config.serverPort || config.webhookPort || 3456;
@@ -1319,6 +1330,39 @@ export class EdgeWorker extends EventEmitter {
 	}
 
 	/**
+	 * Get or create prompt adapter for a repository
+	 */
+	private getPromptAdapter(repository: RepositoryConfig): PromptSystemAdapter | null {
+		// If repository has a prompt system type configured, use it
+		if (repository.promptSystem) {
+			const adapter = PromptSystemFactory.getInstance().createAdapter(repository.promptSystem, {
+				repositoryPath: repository.repositoryPath,
+				globalInstructionsPath: join(homedir(), '.agent-os'),
+			});
+			
+			if (adapter) {
+				console.log(`[EdgeWorker] Using ${repository.promptSystem} prompt adapter for repository ${repository.name}`);
+				return adapter;
+			}
+		}
+		
+		// Check if global prompt system is configured
+		if (this.config.features?.promptSystem) {
+			const adapter = PromptSystemFactory.getInstance().createAdapter(this.config.features.promptSystem, {
+				repositoryPath: repository.repositoryPath,
+				globalInstructionsPath: join(homedir(), '.agent-os'),
+			});
+			
+			if (adapter) {
+				console.log(`[EdgeWorker] Using global ${this.config.features.promptSystem} prompt adapter`);
+				return adapter;
+			}
+		}
+		
+		return null;
+	}
+
+	/**
 	 * Build simplified prompt for label-based workflows
 	 * @param issue Full Linear issue
 	 * @param repository Repository configuration
@@ -1333,6 +1377,58 @@ export class EdgeWorker extends EventEmitter {
 			`[EdgeWorker] buildLabelBasedPrompt called for issue ${issue.identifier}`,
 		);
 
+		// Try to use adapter if available
+		const adapter = this.getPromptAdapter(repository);
+		if (adapter) {
+			try {
+				// Build context for adapter
+				const baseBranch = await this.determineBaseBranch(issue, repository);
+				const context: PromptContext = {
+					repository: {
+						name: repository.name,
+						path: repository.repositoryPath,
+						baseBranch
+					},
+					issue: {
+						id: issue.id,
+						identifier: issue.identifier,
+						title: issue.title || '',
+						description: issue.description || undefined,
+						url: issue.url,
+						state: (await issue.state)?.name || 'Unknown',
+						priority: issue.priority?.toString() || 'None',
+						branchName: issue.branchName
+					},
+					session: {
+						type: 'label',
+						attachmentManifest: attachmentManifest || undefined
+					}
+				};
+
+				const result = await adapter.buildPrompt(context);
+				let prompt = result.prompt;
+				
+				// Add attachment manifest if not already included by adapter
+				if (attachmentManifest && !prompt.includes(attachmentManifest)) {
+					prompt = `${prompt}\n\n${attachmentManifest}`;
+				}
+				
+				// Add last message marker
+				if (!prompt.includes(LAST_MESSAGE_MARKER)) {
+					prompt = `${prompt}${LAST_MESSAGE_MARKER}`;
+				}
+				
+				console.log(
+					`[EdgeWorker] Label-based prompt built using adapter, length: ${prompt.length} characters`,
+				);
+				return { prompt, version: result.metadata?.version };
+			} catch (error) {
+				console.error(`[EdgeWorker] Error using adapter for label-based prompt:`, error);
+				// Fall through to legacy implementation
+			}
+		}
+
+		// Legacy implementation
 		try {
 			// Load the label-based prompt template
 			const __filename = fileURLToPath(import.meta.url);
