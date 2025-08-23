@@ -80,6 +80,10 @@ export class EdgeWorker extends EventEmitter {
 	private persistenceManager: PersistenceManager;
 	private sharedApplicationServer: SharedApplicationServer;
 	private cyrusHome: string;
+	
+	// Prompt caching
+	private promptCache: Map<string, { content: string; version?: string; timestamp: number }> = new Map();
+	private readonly PROMPT_CACHE_TTL = 5 * 60 * 1000; // 5 minutes in milliseconds
 
 	constructor(config: EdgeWorkerConfig) {
 		super();
@@ -1557,6 +1561,60 @@ IMPORTANT: You were specifically mentioned in the comment above. Focus on addres
 	 */
 	private sanitizeBranchName(name: string): string {
 		return name ? name.replace(/`/g, "") : name;
+	}
+
+	/**
+	 * Get cached prompt content with validation and error handling
+	 * @param promptPath Path to the prompt file
+	 * @param promptType Type of prompt for caching key and error messages
+	 * @returns Promise resolving to prompt content and version
+	 * @throws TypeError if promptPath or promptType are invalid
+	 */
+	private async getCachedPrompt(
+		promptPath: string,
+		promptType: string,
+	): Promise<{ content: string; version?: string }> {
+		// Validate input parameters
+		if (typeof promptPath !== "string" || promptPath.trim() === "") {
+			throw new TypeError("promptPath must be a non-empty string");
+		}
+		if (typeof promptType !== "string" || promptType.trim() === "") {
+			throw new TypeError("promptType must be a non-empty string");
+		}
+
+		const cacheKey = `${promptType}:${promptPath}`;
+		const now = Date.now();
+
+		// Check cache first
+		const cached = this.promptCache.get(cacheKey);
+		if (cached && now - cached.timestamp < this.PROMPT_CACHE_TTL) {
+			console.log(
+				`[EdgeWorker] Using cached ${promptType} prompt (age: ${Math.round((now - cached.timestamp) / 1000)}s)`,
+			);
+			return { content: cached.content, version: cached.version };
+		}
+
+		// Load from file system with error handling
+		try {
+			console.log(`[EdgeWorker] Loading ${promptType} prompt from file system`);
+			const content = await readFile(promptPath, "utf-8");
+			const version = this.extractVersionTag(content);
+
+			// Cache the result only on successful read
+			this.promptCache.set(cacheKey, { content, version, timestamp: now });
+
+			return { content, version };
+		} catch (error) {
+			// Log descriptive error with cache key and error details
+			console.error(
+				`[EdgeWorker] Failed to read ${promptType} prompt file for cache key '${cacheKey}':`,
+				error instanceof Error ? error.message : String(error),
+			);
+			console.error(`[EdgeWorker] Prompt file path: ${promptPath}`);
+			
+			// Do not cache failed results, rethrow the error to maintain caller contract
+			throw error;
+		}
 	}
 
 	/**
