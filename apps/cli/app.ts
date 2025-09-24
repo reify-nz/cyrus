@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import readline from "node:readline";
 import type { Issue } from "@linear/sdk";
+import { DEFAULT_PROXY_URL } from "cyrus-core";
 import {
 	EdgeWorker,
 	type EdgeWorkerConfig,
@@ -26,8 +27,7 @@ const args = process.argv.slice(2);
 const envFileArg = args.find((arg) => arg.startsWith("--env-file="));
 const cyrusHomeArg = args.find((arg) => arg.startsWith("--cyrus-home="));
 
-// Constants
-const DEFAULT_PROXY_URL = "https://cyrus-proxy.ceedar.workers.dev";
+// Constants are imported from cyrus-core
 
 // Determine the Cyrus home directory once at startup
 let CYRUS_HOME: string;
@@ -277,6 +277,7 @@ class EdgeApp {
 
 			// Set reasonable defaults for configuration
 			// Allowed tools - default to all tools except Bash, plus Bash(git:*) and Bash(gh:*)
+			// Note: MCP tools (mcp__linear, mcp__cyrus-mcp-tools) are automatically added by EdgeWorker
 			const allowedTools = [
 				"Read(**)",
 				"Edit(**)",
@@ -302,6 +303,10 @@ class EdgeApp {
 				},
 				scoper: {
 					labels: ["PRD"],
+				},
+				orchestrator: {
+					labels: ["Orchestrator"],
+					allowedTools: "coordinator" as const, // Uses coordinator tools (all except file editing)
 				},
 			};
 
@@ -400,6 +405,19 @@ class EdgeApp {
 			return config.ngrokAuthToken;
 		}
 
+		// Skip ngrok setup if using external host
+		const isExternalHost =
+			process.env.CYRUS_HOST_EXTERNAL?.toLowerCase().trim() === "true";
+		if (isExternalHost) {
+			console.log(
+				`\n📡 Using external host configuration (CYRUS_HOST_EXTERNAL=true)`,
+			);
+			console.log(
+				`   Skipping ngrok setup - using ${process.env.CYRUS_BASE_URL || "configured base URL"}`,
+			);
+			return undefined;
+		}
+
 		// Prompt user for ngrok auth token
 		console.log(`\n🔗 Ngrok Setup Required`);
 		console.log(`─`.repeat(50));
@@ -467,7 +485,9 @@ class EdgeApp {
 	}): Promise<void> {
 		// Get ngrok auth token (prompt if needed and not external host)
 		let ngrokAuthToken: string | undefined;
-		if (process.env.CYRUS_HOST_EXTERNAL !== "true") {
+		const isExternalHost =
+			process.env.CYRUS_HOST_EXTERNAL?.toLowerCase().trim() === "true";
+		if (!isExternalHost) {
 			const config = this.loadEdgeConfig();
 			ngrokAuthToken = await this.getNgrokAuthToken(config);
 		}
@@ -479,6 +499,9 @@ class EdgeApp {
 			cyrusHome: this.cyrusHome,
 			defaultAllowedTools:
 				process.env.ALLOWED_TOOLS?.split(",").map((t) => t.trim()) || [],
+			defaultDisallowedTools:
+				process.env.DISALLOWED_TOOLS?.split(",").map((t) => t.trim()) ||
+				undefined,
 			// Model configuration: environment variables take precedence over config file
 			defaultModel:
 				process.env.CYRUS_DEFAULT_MODEL || this.loadEdgeConfig().defaultModel,
@@ -489,8 +512,7 @@ class EdgeApp {
 			serverPort: process.env.CYRUS_SERVER_PORT
 				? parseInt(process.env.CYRUS_SERVER_PORT, 10)
 				: 3456,
-			serverHost:
-				process.env.CYRUS_HOST_EXTERNAL === "true" ? "0.0.0.0" : "localhost",
+			serverHost: isExternalHost ? "0.0.0.0" : "localhost",
 			ngrokAuthToken,
 			features: {
 				enableContinuation: true,
@@ -1590,7 +1612,8 @@ async function refreshTokenCommand() {
 			? parseInt(process.env.CYRUS_SERVER_PORT, 10)
 			: 3456;
 		const callbackUrl = `http://localhost:${serverPort}/callback`;
-		const oauthUrl = `${DEFAULT_PROXY_URL}/oauth/authorize?callback=${encodeURIComponent(
+		const proxyUrl = process.env.PROXY_URL || DEFAULT_PROXY_URL;
+		const oauthUrl = `${proxyUrl}/oauth/authorize?callback=${encodeURIComponent(
 			callbackUrl,
 		)}`;
 
@@ -1717,8 +1740,7 @@ async function addRepositoryCommand() {
 			console.log("🔐 No Linear credentials found. Starting OAuth flow...");
 
 			// Start OAuth flow using the default proxy URL
-			const proxyUrl =
-				process.env.PROXY_URL || "https://cyrus-proxy.ceedar.workers.dev";
+			const proxyUrl = process.env.PROXY_URL || DEFAULT_PROXY_URL;
 			linearCredentials = await app.startOAuthFlow(proxyUrl);
 
 			if (!linearCredentials) {

@@ -8,11 +8,19 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import {
-	AbortError,
 	query,
 	type SDKMessage,
 	type SDKUserMessage,
 } from "@anthropic-ai/claude-code";
+
+// AbortError is no longer exported in v1.0.95, so we define it locally
+export class AbortError extends Error {
+	constructor(message?: string) {
+		super(message);
+		this.name = "AbortError";
+	}
+}
+
 import type {
 	ClaudeRunnerConfig,
 	ClaudeRunnerEvents,
@@ -270,6 +278,21 @@ export class ClaudeRunner extends EventEmitter {
 					: directoryTools;
 			}
 
+			// Process disallowed tools - no defaults, just pass through
+			// Only pass if array is non-empty
+			const processedDisallowedTools =
+				this.config.disallowedTools && this.config.disallowedTools.length > 0
+					? this.config.disallowedTools
+					: undefined;
+
+			// Log disallowed tools if configured
+			if (processedDisallowedTools) {
+				console.log(
+					`[ClaudeRunner] Disallowed tools configured:`,
+					processedDisallowedTools,
+				);
+			}
+
 			// Parse MCP config - merge file(s) and inline configs
 			let mcpServers = {};
 
@@ -332,10 +355,14 @@ export class ClaudeRunner extends EventEmitter {
 						appendSystemPrompt: this.config.appendSystemPrompt,
 					}),
 					...(processedAllowedTools && { allowedTools: processedAllowedTools }),
+					...(processedDisallowedTools && {
+						disallowedTools: processedDisallowedTools,
+					}),
 					...(this.config.resumeSessionId && {
 						resume: this.config.resumeSessionId,
 					}),
 					...(Object.keys(mcpServers).length > 0 && { mcpServers }),
+					...(this.config.hooks && { hooks: this.config.hooks }),
 				},
 			};
 
