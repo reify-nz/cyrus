@@ -1,6 +1,5 @@
 import { EventEmitter } from "node:events";
 import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -63,6 +62,9 @@ export declare interface EdgeWorker {
 	): boolean;
 }
 
+const LAST_MESSAGE_MARKER =
+	"\n\nIMPORTANT: When providing your final summary response, include the special marker ___LAST_MESSAGE_MARKER___ at the very beginning of your message. This marker will be automatically removed before posting.";
+
 /**
  * Unified edge worker that **orchestrates**
  *   capturing Linear webhooks,
@@ -77,11 +79,15 @@ export class EdgeWorker extends EventEmitter {
 	private ndjsonClients: Map<string, NdjsonClient> = new Map(); // listeners for webhook events, one per linear token
 	private persistenceManager: PersistenceManager;
 	private sharedApplicationServer: SharedApplicationServer;
+	private cyrusHome: string;
 
 	constructor(config: EdgeWorkerConfig) {
 		super();
 		this.config = config;
-		this.persistenceManager = new PersistenceManager();
+		this.cyrusHome = config.cyrusHome;
+		this.persistenceManager = new PersistenceManager(
+			join(this.cyrusHome, "state"),
+		);
 
 		// Initialize shared application server
 		const serverPort = config.serverPort || config.webhookPort || 3456;
@@ -664,8 +670,7 @@ export class EdgeWorker extends EventEmitter {
 		// Pre-create attachments directory even if no attachments exist yet
 		const workspaceFolderName = basename(workspace.path);
 		const attachmentsDir = join(
-			homedir(),
-			".cyrus",
+			this.cyrusHome,
 			workspaceFolderName,
 			"attachments",
 		);
@@ -969,8 +974,7 @@ export class EdgeWorker extends EventEmitter {
 		// Always set up attachments directory, even if no attachments in current comment
 		const workspaceFolderName = basename(session.workspace.path);
 		const attachmentsDir = join(
-			homedir(),
-			".cyrus",
+			this.cyrusHome,
 			workspaceFolderName,
 			"attachments",
 		);
@@ -1057,6 +1061,7 @@ export class EdgeWorker extends EventEmitter {
 			if (attachmentManifest) {
 				fullPrompt = `${promptBody}\n\n${attachmentManifest}`;
 			}
+			fullPrompt = `${fullPrompt}${LAST_MESSAGE_MARKER}`;
 
 			existingRunner.addStreamMessage(fullPrompt);
 			return; // Exit early - comment has been added to stream
@@ -1374,6 +1379,7 @@ export class EdgeWorker extends EventEmitter {
 				prompt = `${prompt}\n\n${attachmentManifest}`;
 			}
 
+			prompt = `${prompt}${LAST_MESSAGE_MARKER}`;
 			console.log(
 				`[EdgeWorker] Label-based prompt built successfully, length: ${prompt.length} characters`,
 			);
@@ -1426,6 +1432,7 @@ IMPORTANT: You were specifically mentioned in the comment above. Focus on addres
 				prompt = `${prompt}\n\n${attachmentManifest}`;
 			}
 
+			prompt = `${prompt}${LAST_MESSAGE_MARKER}`;
 			return { prompt };
 		} catch (error) {
 			console.error(`[EdgeWorker] Error building mention prompt:`, error);
@@ -1796,6 +1803,8 @@ IMPORTANT: Focus specifically on addressing the new comment above. This is a new
 				prompt = `${prompt}\n\n<repository-specific-instruction>\n${repository.appendInstruction}\n</repository-specific-instruction>`;
 			}
 
+			prompt = `${prompt}${LAST_MESSAGE_MARKER}`;
+
 			console.log(
 				`[EdgeWorker] Final prompt length: ${prompt.length} characters`,
 			);
@@ -1823,7 +1832,7 @@ Branch: ${issue.branchName}
 Working directory: ${repository.repositoryPath}
 Base branch: ${baseBranch}
 
-${newComment ? `New comment to address:\n${newComment.body}\n\n` : ""}Please analyze this issue and help implement a solution.`;
+${newComment ? `New comment to address:\n${newComment.body}\n\n` : ""}Please analyze this issue and help implement a solution. ${LAST_MESSAGE_MARKER}`;
 
 			return { prompt: fallbackPrompt, version: undefined };
 		}
@@ -1921,7 +1930,7 @@ ${newComment ? `New comment to address:\n${newComment.body}\n\n` : ""}Please ana
 				filter: { team: { id: { eq: team.id } } },
 			});
 
-			const states = await teamStates;
+			const states = teamStates;
 
 			// Find all states with type "started" and pick the one with lowest position
 			// This ensures we pick "In Progress" over "In Review" when both have type "started"
@@ -2047,8 +2056,7 @@ ${newComment ? `New comment to address:\n${newComment.body}\n\n` : ""}Please ana
 		// Create attachments directory in home directory
 		const workspaceFolderName = basename(workspacePath);
 		const attachmentsDir = join(
-			homedir(),
-			".cyrus",
+			this.cyrusHome,
 			workspaceFolderName,
 			"attachments",
 		);
@@ -2559,10 +2567,10 @@ ${newComment ? `New comment to address:\n${newComment.body}\n\n` : ""}Please ana
 			return `${promptResult.prompt}\n\nUser comment: ${promptBody}`;
 		} else {
 			// For existing sessions, just use the comment with attachment manifest
-			if (attachmentManifest) {
-				return `${promptBody}\n\n${attachmentManifest}`;
-			}
-			return promptBody;
+			const manifestSuffix = attachmentManifest
+				? `\n\n${attachmentManifest}`
+				: "";
+			return `${promptBody}${manifestSuffix}${LAST_MESSAGE_MARKER}`;
 		}
 	}
 
@@ -2578,17 +2586,19 @@ ${newComment ? `New comment to address:\n${newComment.body}\n\n` : ""}Please ana
 		allowedDirectories: string[],
 		resumeSessionId?: string,
 	): any {
-		const lastMessageMarker =
-			"\n\n___LAST_MESSAGE_MARKER___\nIMPORTANT: When providing your final summary response, include the special marker ___LAST_MESSAGE_MARKER___ at the very beginning of your message. This marker will be automatically removed before posting.";
-
 		const config = {
 			workingDirectory: session.workspace.path,
 			allowedTools,
 			allowedDirectories,
 			workspaceName: session.issue?.identifier || session.issueId,
+			cyrusHome: this.cyrusHome,
 			mcpConfigPath: repository.mcpConfigPath,
 			mcpConfig: this.buildMcpConfig(repository),
-			appendSystemPrompt: (systemPrompt || "") + lastMessageMarker,
+			appendSystemPrompt: (systemPrompt || "") + LAST_MESSAGE_MARKER,
+			// Use repository-specific model or fall back to global default
+			model: repository.model || this.config.defaultModel,
+			fallbackModel:
+				repository.fallbackModel || this.config.defaultFallbackModel,
 			onMessage: (message: SDKMessage) => {
 				this.handleClaudeMessage(
 					linearAgentActivitySessionId,

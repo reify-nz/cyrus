@@ -34,6 +34,7 @@ describe("ClaudeRunner", () => {
 
 	const defaultConfig: ClaudeRunnerConfig = {
 		workingDirectory: "/tmp/test",
+		cyrusHome: "/tmp/test-cyrus-home",
 	};
 
 	beforeEach(() => {
@@ -123,6 +124,8 @@ describe("ClaudeRunner", () => {
 			expect(mockQuery).toHaveBeenCalledWith({
 				prompt: "Hello Claude",
 				options: {
+					model: "opus",
+					fallbackModel: "sonnet",
 					abortController: expect.any(AbortController),
 					cwd: "/tmp/test",
 				},
@@ -149,6 +152,8 @@ describe("ClaudeRunner", () => {
 			expect(mockQuery).toHaveBeenCalledWith({
 				prompt: "test",
 				options: {
+					model: "opus",
+					fallbackModel: "sonnet",
 					abortController: expect.any(AbortController),
 					cwd: "/tmp/test",
 				},
@@ -175,6 +180,8 @@ describe("ClaudeRunner", () => {
 			expect(mockQuery).toHaveBeenCalledWith({
 				prompt: "test",
 				options: {
+					model: "opus",
+					fallbackModel: "sonnet",
 					abortController: expect.any(AbortController),
 					cwd: "/tmp/test",
 					customSystemPrompt: "You are a helpful assistant",
